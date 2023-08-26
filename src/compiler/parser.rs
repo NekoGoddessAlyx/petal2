@@ -21,7 +21,7 @@ pub enum StateError {
     CannotTransfer,
 }
 
-pub fn parse<C: CompilerCallback>(callback: &mut C, tokens: &[Token], sources: &[Source]) -> Result<Ast, ParserError> {
+pub fn parse<C: CompilerCallback>(callback: C, tokens: &[Token], sources: &[Source]) -> Result<Ast, ParserError> {
     let len = tokens.len();
     let mut parser = Parser {
         callback,
@@ -48,7 +48,7 @@ enum State {
 }
 
 impl State {
-    fn enter<C: CompilerCallback>(&mut self, from: Option<State>, parser: &mut Parser<'_, '_, C>) -> Result<(), StateError> {
+    fn enter<C: CompilerCallback>(&mut self, from: Option<State>, parser: &mut Parser<'_, C>) -> Result<(), StateError> {
         macro_rules! fail_transfer {
             () => {
                 {
@@ -100,8 +100,8 @@ impl State {
     }
 }
 
-struct Parser<'callback, 'tokens, C> {
-    callback: &'callback mut C,
+struct Parser<'tokens, C> {
+    callback: C,
     had_error: bool,
     tokens: &'tokens [Token],
     sources: &'tokens [Source],
@@ -110,7 +110,7 @@ struct Parser<'callback, 'tokens, C> {
     ast: Ast,
 }
 
-impl<C: CompilerCallback> Parser<'_, '_, C> {
+impl<C: CompilerCallback> Parser<'_, C> {
     fn on_error(&mut self, message: &dyn Display, source: Option<Source>) {
         self.had_error = true;
         (self.callback)(message, source);
@@ -121,7 +121,9 @@ impl<C: CompilerCallback> Parser<'_, '_, C> {
     }
 
     fn peek_source(&self) -> Option<Source> {
-        self.sources.get(self.cursor).copied()
+        self.sources.get(self.cursor)
+            .xor(self.sources.last())
+            .copied()
     }
 
     fn advance(&mut self) -> Token {

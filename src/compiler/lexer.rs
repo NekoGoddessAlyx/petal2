@@ -46,39 +46,46 @@ pub struct Source {
     pub line_number: LineNumber,
 }
 
-pub fn lex<C: CompilerCallback, S: AsRef<[u8]>>(callback: &mut C, source: S) -> (Box<[Token]>, Box<[Source]>) {
+pub fn lex<C: CompilerCallback, S: AsRef<[u8]>>(callback: C, source: S) -> (Box<[Token]>, Box<[Source]>, Box<[Span]>) {
     let source = source.as_ref();
     let mut lexer = Lexer {
         callback,
         source,
         buffer: Vec::with_capacity(16),
         cursor: Span { start: 0, end: 0 },
+        line_cursor: Span { start: 0, end: 0 },
         line_number: 1,
         tokens: Vec::with_capacity(64),
         sources: Vec::with_capacity(64),
+        line_spans: Vec::with_capacity(32),
     };
 
     while lexer.peek(0).is_some() {
         lexer.read_next();
     }
+    lexer.line_spans.push(lexer.line_cursor);
 
     let tokens = lexer.tokens.into_boxed_slice();
     let sources = lexer.sources.into_boxed_slice();
+    let line_spans = lexer.line_spans.into_boxed_slice();
     assert_eq!(tokens.len(), sources.len(), "Mismatch between tokens and sources");
-    (tokens, sources)
+    assert_eq!(line_spans.len(), lexer.line_number as usize, "Mismatch between line sources and line number");
+    (tokens, sources, line_spans)
 }
 
-struct Lexer<'callback, 'source, C> {
-    callback: &'callback mut C,
+struct Lexer<'source, C> {
+    callback: C,
     source: &'source [u8],
     buffer: Vec<u8>,
     cursor: Span,
+    line_cursor: Span,
     line_number: u32,
     tokens: Vec<Token>,
     sources: Vec<Source>,
+    line_spans: Vec<Span>,
 }
 
-impl<C: CompilerCallback> Lexer<'_, '_, C> {
+impl<C: CompilerCallback> Lexer<'_, C> {
     fn on_error(&mut self, message: &dyn Display, source: Option<Source>) {
         (self.callback)(message, source)
     }
@@ -90,6 +97,7 @@ impl<C: CompilerCallback> Lexer<'_, '_, C> {
     fn advance(&mut self, n: usize) {
         assert!(self.cursor.end as usize + n <= self.source.len(), "Cannot advance past end of source");
         self.cursor.end += n as u32;
+        self.line_cursor.end += n as u32;
     }
 
     fn parse<T: FromStr>(&self) -> Option<T> {
@@ -136,6 +144,8 @@ impl<C: CompilerCallback> Lexer<'_, '_, C> {
         }
 
         self.line_number += 1;
+        self.line_spans.push(self.line_cursor);
+        self.line_cursor.start = self.line_cursor.end;
     }
 
     fn read_next(&mut self) {
