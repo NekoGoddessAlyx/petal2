@@ -1,68 +1,6 @@
-use std::ops::Index;
-
-use crate::lexer::Token;
-
-#[derive(Debug)]
-pub struct Ast(Vec<Node>);
-
-impl Ast {
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    fn push(&mut self, node: Node) -> NodeRef {
-        let index = self.0.len();
-        self.0.push(node);
-        NodeRef(index as u32)
-    }
-}
-
-impl IntoIterator for Ast {
-    type Item = Node;
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
-impl Index<NodeRef> for Ast {
-    type Output = Node;
-
-    fn index(&self, index: NodeRef) -> &Self::Output {
-        &self.0[index.0 as usize]
-    }
-}
-
-#[derive(Debug)]
-pub enum Node {
-    Integer(i64),
-    Float(f64),
-    UnOp(UnOp, NodeRef),
-    BinOp(BinOp, NodeRef, NodeRef),
-}
-
-#[derive(Copy, Clone, Debug)]
-pub enum UnOp {
-    Neg,
-}
-
-#[derive(Copy, Clone, Debug)]
-pub enum BinOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct NodeRef(u32);
-
-impl From<NodeRef> for usize {
-    fn from(value: NodeRef) -> Self {
-        value.0 as usize
-    }
-}
+use crate::compiler::ast::{Ast, BinOp, Node, NodeRef, UnOp};
+use crate::compiler::Callback;
+use crate::compiler::lexer::Token;
 
 #[derive(Debug)]
 pub enum ParserError {
@@ -81,7 +19,7 @@ pub enum StateError {
     CannotTransfer,
 }
 
-pub fn parse<C: FnMut(&'static str)>(callback: C, tokens: &[Token]) -> Result<Ast, ParserError> {
+pub fn parse<C: Callback>(callback: &mut C, tokens: &[Token]) -> Result<Ast, ParserError> {
     let len = tokens.len();
     let mut parser = Parser {
         callback,
@@ -89,7 +27,7 @@ pub fn parse<C: FnMut(&'static str)>(callback: C, tokens: &[Token]) -> Result<As
         tokens,
         cursor: 0,
         state: Vec::with_capacity(32),
-        ast: Ast(Vec::with_capacity(len)),
+        ast: Ast::new(len),
     };
 
     parser.push_state(State::BeginExpression(Precedence::root()));
@@ -107,7 +45,7 @@ enum State {
 }
 
 impl State {
-    fn enter<C: FnMut(&'static str)>(&mut self, from: Option<State>, parser: &mut Parser<'_, C>) -> Result<(), StateError> {
+    fn enter<C: Callback>(&mut self, from: Option<State>, parser: &mut Parser<'_, '_, C>) -> Result<(), StateError> {
         macro_rules! fail_transfer {
             () => {
                 {
@@ -159,8 +97,8 @@ impl State {
     }
 }
 
-struct Parser<'tokens, C> {
-    callback: C,
+struct Parser<'callback, 'tokens, C> {
+    callback: &'callback mut C,
     had_error: bool,
     tokens: &'tokens [Token],
     cursor: usize,
@@ -168,7 +106,7 @@ struct Parser<'tokens, C> {
     ast: Ast,
 }
 
-impl<'tokens, C: FnMut(&'static str)> Parser<'tokens, C> {
+impl<C: Callback> Parser<'_, '_, C> {
     fn on_error(&mut self, message: &'static str) {
         self.had_error = true;
         (self.callback)(message);

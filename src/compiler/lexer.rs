@@ -1,5 +1,7 @@
 use std::str::{from_utf8, FromStr};
 
+use crate::compiler::Callback;
+
 #[derive(Copy, Clone, Debug)]
 pub enum Token {
     Add,
@@ -28,7 +30,7 @@ pub struct Source {
     pub line_number: LineNumber,
 }
 
-pub fn lex<C: FnMut(&'static str), S: AsRef<[u8]>>(callback: C, source: S) -> (Box<[Token]>, Box<[Source]>) {
+pub fn lex<C: Callback, S: AsRef<[u8]>>(callback: &mut C, source: S) -> (Box<[Token]>, Box<[Source]>) {
     let source = source.as_ref();
     let mut lexer = Lexer {
         callback,
@@ -50,8 +52,8 @@ pub fn lex<C: FnMut(&'static str), S: AsRef<[u8]>>(callback: C, source: S) -> (B
     (tokens, sources)
 }
 
-struct Lexer<'source, C> {
-    callback: C,
+struct Lexer<'callback, 'source, C> {
+    callback: &'callback mut C,
     source: &'source [u8],
     buffer: Vec<u8>,
     cursor: Span,
@@ -60,7 +62,7 @@ struct Lexer<'source, C> {
     sources: Vec<Source>,
 }
 
-impl<'source, C: FnMut(&'static str)> Lexer<'source, C> {
+impl<C: Callback> Lexer<'_, '_, C> {
     fn on_error(&mut self, message: &'static str) {
         (self.callback)(message);
     }
