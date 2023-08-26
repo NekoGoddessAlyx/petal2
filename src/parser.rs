@@ -1,14 +1,28 @@
 use std::ops::Index;
+
 use crate::lexer::Token;
 
 #[derive(Debug)]
 pub struct Ast(Vec<Node>);
 
 impl Ast {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     fn push(&mut self, node: Node) -> NodeRef {
         let index = self.0.len();
         self.0.push(node);
         NodeRef(index as u32)
+    }
+}
+
+impl IntoIterator for Ast {
+    type Item = Node;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }
 
@@ -43,6 +57,12 @@ pub enum BinOp {
 
 #[derive(Copy, Clone, Debug)]
 pub struct NodeRef(u32);
+
+impl From<NodeRef> for usize {
+    fn from(value: NodeRef) -> Self {
+        value.0 as usize
+    }
+}
 
 #[derive(Debug)]
 pub enum ParserError {

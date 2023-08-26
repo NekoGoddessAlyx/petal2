@@ -1,8 +1,10 @@
+use crate::interpreter::interpret;
 use crate::lexer::lex;
 use crate::parser::parse;
 
 mod lexer;
 mod parser;
+mod interpreter;
 
 fn callback(message: &'static str) {
     println!("{}", message);
@@ -16,12 +18,17 @@ fn main() {
     println!("Sources: {:?}", sources);
 
     let parse_result = parse(callback, &tokens);
-    match parse_result {
+    let ast = match parse_result {
         Ok(ast) => {
             println!("Ast: {:?}", ast);
+            ast
         }
         Err(error) => {
             println!("Parse failed: {:?}", error);
+            return;
         }
-    }
+    };
+
+    let result = interpret(ast);
+    println!("Result: {}", result);
 }
