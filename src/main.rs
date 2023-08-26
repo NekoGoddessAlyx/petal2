@@ -9,7 +9,7 @@ fn callback(message: &'static str) {
 }
 
 fn main() {
-    let source = "1 + 2 * 3\n * 4";
+    let source = "1 + -2 * 3\n * -4";
 
     let (tokens, sources) = lex(callback, source);
     println!("Tokens: {:?}", tokens);

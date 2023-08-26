@@ -24,7 +24,13 @@ impl Index<NodeRef> for Ast {
 pub enum Node {
     Integer(i64),
     Float(f64),
+    UnOp(UnOp, NodeRef),
     BinOp(BinOp, NodeRef, NodeRef),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum UnOp {
+    Neg,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -75,7 +81,9 @@ enum State {
     BeginExpression(Precedence),
     EndExpression(NodeRef),
     BeginExpressionInfix(Precedence, NodeRef),
-    EndExpressionBinary(Precedence, BinOp, NodeRef),
+
+    EndPrefixExpression(Precedence, UnOp),
+    EndBinaryExpression(Precedence, BinOp, NodeRef),
 }
 
 impl State {
@@ -92,6 +100,7 @@ impl State {
         match *self {
             State::BeginExpression(precedence) => match from {
                 None | // <- only valid while expression is the root
+                Some(State::BeginExpression(..)) |
                 Some(State::BeginExpressionInfix(..)) => {
                     parser.begin_expression(precedence);
                     Ok(())
@@ -104,13 +113,22 @@ impl State {
             }
             State::BeginExpressionInfix(precedence, left) => match from {
                 Some(State::BeginExpression(..)) |
-                Some(State::EndExpressionBinary(..)) => {
+                Some(State::EndPrefixExpression(..)) |
+                Some(State::EndBinaryExpression(..)) => {
                     parser.begin_expression_infix(precedence, left);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             }
-            State::EndExpressionBinary(precedence, op, left) => match from {
+
+            State::EndPrefixExpression(precedence, op) => match from {
+                Some(State::EndExpression(right)) => {
+                    parser.end_prefix_expression(precedence, op, right);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            }
+            State::EndBinaryExpression(precedence, op, left) => match from {
                 Some(State::EndExpression(right)) => {
                     parser.end_binary_expression(precedence, op, left, right);
                     Ok(())
@@ -174,6 +192,11 @@ impl<'tokens, C: FnMut(&'static str)> Parser<'tokens, C> {
 
     fn begin_expression(&mut self, precedence: Precedence) {
         match self.peek() {
+            Token::Sub => {
+                self.advance();
+                self.push_state(State::EndPrefixExpression(precedence, UnOp::Neg));
+                self.push_state(State::BeginExpression(Precedence::Prefix));
+            }
             Token::Integer(v) => {
                 self.advance();
                 let left = self.ast.push(Node::Integer(v));
@@ -206,28 +229,33 @@ impl<'tokens, C: FnMut(&'static str)> Parser<'tokens, C> {
         match next_token {
             Token::Add => {
                 self.advance();
-                self.push_state(State::EndExpressionBinary(precedence, BinOp::Add, left));
+                self.push_state(State::EndBinaryExpression(precedence, BinOp::Add, left));
                 self.push_state(State::BeginExpression(next_precedence.next_precedence()));
             }
             Token::Sub => {
                 self.advance();
-                self.push_state(State::EndExpressionBinary(precedence, BinOp::Sub, left));
+                self.push_state(State::EndBinaryExpression(precedence, BinOp::Sub, left));
                 self.push_state(State::BeginExpression(next_precedence.next_precedence()));
             }
             Token::Mul => {
                 self.advance();
-                self.push_state(State::EndExpressionBinary(precedence, BinOp::Mul, left));
+                self.push_state(State::EndBinaryExpression(precedence, BinOp::Mul, left));
                 self.push_state(State::BeginExpression(next_precedence.next_precedence()));
             }
             Token::Div => {
                 self.advance();
-                self.push_state(State::EndExpressionBinary(precedence, BinOp::Div, left));
+                self.push_state(State::EndBinaryExpression(precedence, BinOp::Div, left));
                 self.push_state(State::BeginExpression(next_precedence.next_precedence()));
             }
             _ => {
                 self.push_state(State::EndExpression(left));
             }
         }
+    }
+
+    fn end_prefix_expression(&mut self, precedence: Precedence, op: UnOp, right: NodeRef) {
+        let left = self.ast.push(Node::UnOp(op, right));
+        self.push_state(State::BeginExpressionInfix(precedence, left));
     }
 
     fn end_binary_expression(&mut self, precedence: Precedence, op: BinOp, left: NodeRef, right: NodeRef) {
@@ -241,6 +269,7 @@ enum Precedence {
     None,
     Additive,
     Multiplicative,
+    Prefix,
     Primary,
 }
 
@@ -253,7 +282,8 @@ impl Precedence {
         match self {
             Precedence::None => Precedence::Additive,
             Precedence::Additive => Precedence::Multiplicative,
-            Precedence::Multiplicative | Precedence::Primary => Precedence::Primary,
+            Precedence::Multiplicative => Precedence::Prefix,
+            Precedence::Prefix | Precedence::Primary => Precedence::Primary,
         }
     }
 }
