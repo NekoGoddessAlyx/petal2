@@ -1,12 +1,12 @@
 use std::fs::read_to_string;
 
-use crate::compiler::compile;
+use crate::compiler::{compile, CompilerMessage};
 use crate::interpreter::interpret;
 
 mod interpreter;
 mod compiler;
 
-fn callback(message: &str) {
+fn callback(message: CompilerMessage) {
     println!("{}", message);
 }
 

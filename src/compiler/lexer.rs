@@ -1,7 +1,22 @@
-use std::borrow::Cow;
+use std::fmt::{Display, Formatter};
 use std::str::{from_utf8, FromStr};
 
-use crate::compiler::CompilerCallback;
+use crate::compiler::callback::CompilerCallback;
+
+pub enum LexerMessage {
+    UnexpectedCharacter(u8),
+}
+
+impl Display for LexerMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LexerMessage::UnexpectedCharacter(c) => {
+                let char = char::from_u32(*c as u32).unwrap_or(char::REPLACEMENT_CHARACTER);
+                write!(f, "Unexpected character '{}'", char)
+            }
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug)]
 pub enum Token {
@@ -64,8 +79,8 @@ struct Lexer<'callback, 'source, C> {
 }
 
 impl<C: CompilerCallback> Lexer<'_, '_, C> {
-    fn on_error(&mut self, message: impl Into<Cow<'static, str>>, source: Option<Source>) {
-        (self.callback)(message.into(), source)
+    fn on_error(&mut self, message: &dyn Display, source: Option<Source>) {
+        (self.callback)(message, source)
     }
 
     fn peek(&self, n: usize) -> Option<u8> {
@@ -149,11 +164,7 @@ impl<C: CompilerCallback> Lexer<'_, '_, C> {
             Some(c) => {
                 self.advance(1);
                 self.on_error(
-                    format!(
-                        "Unexpected character '{}'",
-                        char::from_u32(c as u32)
-                            .unwrap_or(char::REPLACEMENT_CHARACTER)
-                    ),
+                    &LexerMessage::UnexpectedCharacter(c),
                     Some(self.token_source()),
                 );
             }
@@ -197,7 +208,7 @@ impl<C: CompilerCallback> Lexer<'_, '_, C> {
                 self.push_token(Token::Float(f));
             }
             None => {
-                self.on_error("Failed to parse number", Some(self.token_source()));
+                self.on_error(&"Failed to parse number", Some(self.token_source()));
                 self.push_token(Token::Float(f64::NAN));
             }
         }

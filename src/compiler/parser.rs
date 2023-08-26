@@ -1,7 +1,7 @@
-use std::borrow::Cow;
+use std::fmt::Display;
 
 use crate::compiler::ast::{Ast, BinOp, Node, NodeRef, UnOp};
-use crate::compiler::CompilerCallback;
+use crate::compiler::callback::CompilerCallback;
 use crate::compiler::lexer::{Source, Token};
 
 #[derive(Debug)]
@@ -111,9 +111,9 @@ struct Parser<'callback, 'tokens, C> {
 }
 
 impl<C: CompilerCallback> Parser<'_, '_, C> {
-    fn on_error(&mut self, message: impl Into<Cow<'static, str>>, source: Option<Source>) {
+    fn on_error(&mut self, message: &dyn Display, source: Option<Source>) {
         self.had_error = true;
-        (self.callback)(message.into(), source);
+        (self.callback)(message, source);
     }
 
     fn peek(&self) -> Token {
@@ -174,7 +174,7 @@ impl<C: CompilerCallback> Parser<'_, '_, C> {
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
             _ => {
-                self.on_error("Expected expression", self.peek_source());
+                self.on_error(&"Expected expression", self.peek_source());
 
                 // keep the state consistent
                 let left = self.ast.push(Node::Integer(0));
