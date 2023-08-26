@@ -15,18 +15,27 @@ pub trait Callback: FnMut(CompilerMessage) {}
 
 impl<T: FnMut(CompilerMessage)> Callback for T {}
 
-pub struct CompilerMessage<'compiler>(&'compiler dyn Display, Option<(&'compiler [u8], Source, Span)>);
+pub struct CompilerMessage<'compiler> {
+    message: &'compiler dyn Display,
+    source_information: Option<SourceInformation<'compiler>>,
+}
+
+struct SourceInformation<'source> {
+    source: &'source [u8],
+    at: Source,
+    line_span: Span,
+}
 
 impl Display for CompilerMessage<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Error: {}", self.0)?;
-        if let Some(source) = self.1 {
+        write!(f, "Error: {}", self.message)?;
+        if let Some(source) = &self.source_information {
             writeln!(f)?;
-            write!(f, "[line {}]", source.1.line_number.0)?;
+            write!(f, "[line {}]", source.at.line_number.0)?;
 
-            let start = source.2.start as usize;
-            let end = source.2.end as usize;
-            let source = source.0
+            let start = source.line_span.start as usize;
+            let end = source.line_span.end as usize;
+            let source = source.source
                 .get(start..end)
                 .and_then(|source| from_utf8(source).ok());
             match source {
@@ -47,10 +56,16 @@ pub fn compile<C, S>(mut callback: C, source: S) -> Result<Ast, ParserError>
     let source = source.as_ref();
 
     let lexer_callback = |message: &dyn Display, at: Option<Source>| {
-        let message = CompilerMessage(
+        let message = CompilerMessage {
             message,
-            at.map(|at| (source, at, at.span)),
-        );
+            source_information: at.map(|at| {
+                SourceInformation {
+                    source,
+                    at,
+                    line_span: at.span,
+                }
+            }),
+        };
         callback(message);
     };
 
@@ -60,16 +75,19 @@ pub fn compile<C, S>(mut callback: C, source: S) -> Result<Ast, ParserError>
     println!("Lines: {:?}", line_spans);
 
     let parser_callback = |message: &dyn Display, at: Option<Source>| {
-        let message = CompilerMessage(
+        let message = CompilerMessage {
             message,
-            at.map(|at| {
-                let line_span = line_spans
-                    .get((at.line_number.0 as usize).saturating_sub(1))
-                    .copied()
-                    .unwrap_or(at.span);
-                (source, at, line_span)
+            source_information: at.map(|at| {
+                SourceInformation {
+                    source,
+                    at,
+                    line_span: line_spans
+                        .get((at.line_number.0 as usize).saturating_sub(1))
+                        .copied()
+                        .unwrap_or(at.span),
+                }
             }),
-        );
+        };
         callback(message);
     };
 
