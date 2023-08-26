@@ -11,10 +11,12 @@ pub mod ast;
 
 // callback
 
-pub trait Callback: FnMut(CompilerMessage) {}
-
-impl<T: FnMut(CompilerMessage)> Callback for T {}
-
+/// Some message generated during compilation.
+///
+/// Right meow this is only for errors but in the future it could
+/// contain warnings or other diagnostic information.
+///
+/// May have information about where this message was generated from.
 pub struct CompilerMessage<'compiler> {
     message: &'compiler dyn Display,
     source_information: Option<SourceInformation<'compiler>>,
@@ -24,6 +26,19 @@ struct SourceInformation<'source> {
     source: &'source [u8],
     at: Source,
     line_span: Span,
+}
+
+#[allow(unused)]
+impl CompilerMessage<'_> {
+    pub fn message(&self) -> &dyn Display {
+        self.message
+    }
+
+    pub fn line_number(&self) -> Option<u32> {
+        self.source_information
+            .as_ref()
+            .map(|source| source.at.line_number.0)
+    }
 }
 
 impl Display for CompilerMessage<'_> {
@@ -51,7 +66,7 @@ impl Display for CompilerMessage<'_> {
 // compile
 
 pub fn compile<C, S>(mut callback: C, source: S) -> Result<Ast, ParserError>
-    where C: Callback,
+    where C: FnMut(CompilerMessage),
           S: AsRef<[u8]> {
     let source = source.as_ref();
 
@@ -99,7 +114,7 @@ mod callback {
 
     use crate::compiler::lexer::Source;
 
-    pub trait CompilerCallback: FnMut(&dyn Display, Option<Source>) {}
+    pub trait Callback: FnMut(&dyn Display, Option<Source>) {}
 
-    impl<T: FnMut(&dyn Display, Option<Source>)> CompilerCallback for T {}
+    impl<T: FnMut(&dyn Display, Option<Source>)> Callback for T {}
 }

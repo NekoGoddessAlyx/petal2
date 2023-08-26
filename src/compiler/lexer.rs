@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 use std::str::{from_utf8, FromStr};
 
-use crate::compiler::callback::CompilerCallback;
+use crate::compiler::callback::Callback;
 
 pub enum LexerMessage {
     UnexpectedCharacter(u8),
@@ -46,7 +46,7 @@ pub struct Source {
     pub line_number: LineNumber,
 }
 
-pub fn lex<C: CompilerCallback, S: AsRef<[u8]>>(callback: C, source: S) -> (Box<[Token]>, Box<[Source]>, Box<[Span]>) {
+pub fn lex<C: Callback, S: AsRef<[u8]>>(callback: C, source: S) -> (Box<[Token]>, Box<[Source]>, Box<[Span]>) {
     let source = source.as_ref();
     let mut lexer = Lexer {
         callback,
@@ -85,7 +85,7 @@ struct Lexer<'source, C> {
     line_spans: Vec<Span>,
 }
 
-impl<C: CompilerCallback> Lexer<'_, C> {
+impl<C: Callback> Lexer<'_, C> {
     fn on_error(&mut self, message: &dyn Display, source: Option<Source>) {
         (self.callback)(message, source)
     }

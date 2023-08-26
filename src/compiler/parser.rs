@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use crate::compiler::ast::{Ast, BinOp, Node, NodeRef, UnOp};
-use crate::compiler::callback::CompilerCallback;
+use crate::compiler::callback::Callback;
 use crate::compiler::lexer::{Source, Token};
 
 #[derive(Debug)]
@@ -21,7 +21,7 @@ pub enum StateError {
     CannotTransfer,
 }
 
-pub fn parse<C: CompilerCallback>(callback: C, tokens: &[Token], sources: &[Source]) -> Result<Ast, ParserError> {
+pub fn parse<C: Callback>(callback: C, tokens: &[Token], sources: &[Source]) -> Result<Ast, ParserError> {
     let len = tokens.len();
     let mut parser = Parser {
         callback,
@@ -48,7 +48,7 @@ enum State {
 }
 
 impl State {
-    fn enter<C: CompilerCallback>(&mut self, from: Option<State>, parser: &mut Parser<'_, C>) -> Result<(), StateError> {
+    fn enter<C: Callback>(&mut self, from: Option<State>, parser: &mut Parser<'_, C>) -> Result<(), StateError> {
         macro_rules! fail_transfer {
             () => {
                 {
@@ -110,7 +110,7 @@ struct Parser<'tokens, C> {
     ast: Ast,
 }
 
-impl<C: CompilerCallback> Parser<'_, C> {
+impl<C: Callback> Parser<'_, C> {
     fn on_error(&mut self, message: &dyn Display, source: Option<Source>) {
         self.had_error = true;
         (self.callback)(message, source);
