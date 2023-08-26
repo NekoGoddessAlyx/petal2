@@ -6,7 +6,7 @@ use crate::interpreter::interpret;
 mod interpreter;
 mod compiler;
 
-fn callback(message: &'static str) {
+fn callback(message: &str) {
     println!("{}", message);
 }
 

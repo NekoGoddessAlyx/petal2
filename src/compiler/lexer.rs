@@ -1,6 +1,7 @@
+use std::borrow::Cow;
 use std::str::{from_utf8, FromStr};
 
-use crate::compiler::Callback;
+use crate::compiler::CompilerCallback;
 
 #[derive(Copy, Clone, Debug)]
 pub enum Token {
@@ -22,7 +23,7 @@ pub struct Span {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct LineNumber(u32);
+pub struct LineNumber(pub(super) u32);
 
 #[derive(Copy, Clone, Debug)]
 pub struct Source {
@@ -30,7 +31,7 @@ pub struct Source {
     pub line_number: LineNumber,
 }
 
-pub fn lex<C: Callback, S: AsRef<[u8]>>(callback: &mut C, source: S) -> (Box<[Token]>, Box<[Source]>) {
+pub fn lex<C: CompilerCallback, S: AsRef<[u8]>>(callback: &mut C, source: S) -> (Box<[Token]>, Box<[Source]>) {
     let source = source.as_ref();
     let mut lexer = Lexer {
         callback,
@@ -62,9 +63,9 @@ struct Lexer<'callback, 'source, C> {
     sources: Vec<Source>,
 }
 
-impl<C: Callback> Lexer<'_, '_, C> {
-    fn on_error(&mut self, message: &'static str) {
-        (self.callback)(message);
+impl<C: CompilerCallback> Lexer<'_, '_, C> {
+    fn on_error(&mut self, message: impl Into<Cow<'static, str>>, source: Option<Source>) {
+        (self.callback)(message.into(), source)
     }
 
     fn peek(&self, n: usize) -> Option<u8> {
@@ -85,12 +86,16 @@ impl<C: Callback> Lexer<'_, '_, C> {
         self.cursor.start = self.cursor.end;
     }
 
-    fn push_token(&mut self, token: Token) {
-        self.tokens.push(token);
-        self.sources.push(Source {
+    fn token_source(&self) -> Source {
+        Source {
             span: self.cursor,
             line_number: LineNumber(self.line_number),
-        });
+        }
+    }
+
+    fn push_token(&mut self, token: Token) {
+        self.tokens.push(token);
+        self.sources.push(self.token_source());
     }
 
     fn skip_whitespace(&mut self) {
@@ -141,9 +146,16 @@ impl<C: Callback> Lexer<'_, '_, C> {
                 self.push_token(Token::Div);
             }
             Some(c) if c.is_ascii_digit() => self.read_number(),
-            Some(_) => {
-                self.on_error("Unexpected character");
+            Some(c) => {
                 self.advance(1);
+                self.on_error(
+                    format!(
+                        "Unexpected character '{}'",
+                        char::from_u32(c as u32)
+                            .unwrap_or(char::REPLACEMENT_CHARACTER)
+                    ),
+                    Some(self.token_source()),
+                );
             }
             None => {}
         }
@@ -185,7 +197,7 @@ impl<C: Callback> Lexer<'_, '_, C> {
                 self.push_token(Token::Float(f));
             }
             None => {
-                self.on_error("Failed to parse number");
+                self.on_error("Failed to parse number", Some(self.token_source()));
                 self.push_token(Token::Float(f64::NAN));
             }
         }

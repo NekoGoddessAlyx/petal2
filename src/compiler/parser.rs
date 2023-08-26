@@ -1,6 +1,8 @@
+use std::borrow::Cow;
+
 use crate::compiler::ast::{Ast, BinOp, Node, NodeRef, UnOp};
-use crate::compiler::Callback;
-use crate::compiler::lexer::Token;
+use crate::compiler::CompilerCallback;
+use crate::compiler::lexer::{Source, Token};
 
 #[derive(Debug)]
 pub enum ParserError {
@@ -19,12 +21,13 @@ pub enum StateError {
     CannotTransfer,
 }
 
-pub fn parse<C: Callback>(callback: &mut C, tokens: &[Token]) -> Result<Ast, ParserError> {
+pub fn parse<C: CompilerCallback>(callback: &mut C, tokens: &[Token], sources: &[Source]) -> Result<Ast, ParserError> {
     let len = tokens.len();
     let mut parser = Parser {
         callback,
         had_error: false,
         tokens,
+        sources,
         cursor: 0,
         state: Vec::with_capacity(32),
         ast: Ast::new(len),
@@ -45,7 +48,7 @@ enum State {
 }
 
 impl State {
-    fn enter<C: Callback>(&mut self, from: Option<State>, parser: &mut Parser<'_, '_, C>) -> Result<(), StateError> {
+    fn enter<C: CompilerCallback>(&mut self, from: Option<State>, parser: &mut Parser<'_, '_, C>) -> Result<(), StateError> {
         macro_rules! fail_transfer {
             () => {
                 {
@@ -101,19 +104,24 @@ struct Parser<'callback, 'tokens, C> {
     callback: &'callback mut C,
     had_error: bool,
     tokens: &'tokens [Token],
+    sources: &'tokens [Source],
     cursor: usize,
     state: Vec<State>,
     ast: Ast,
 }
 
-impl<C: Callback> Parser<'_, '_, C> {
-    fn on_error(&mut self, message: &'static str) {
+impl<C: CompilerCallback> Parser<'_, '_, C> {
+    fn on_error(&mut self, message: impl Into<Cow<'static, str>>, source: Option<Source>) {
         self.had_error = true;
-        (self.callback)(message);
+        (self.callback)(message.into(), source);
     }
 
     fn peek(&self) -> Token {
         self.tokens.get(self.cursor).copied().unwrap_or(Token::EOF)
+    }
+
+    fn peek_source(&self) -> Option<Source> {
+        self.sources.get(self.cursor).copied()
     }
 
     fn advance(&mut self) -> Token {
@@ -166,7 +174,7 @@ impl<C: Callback> Parser<'_, '_, C> {
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
             _ => {
-                self.on_error("Expected expression");
+                self.on_error("Expected expression", self.peek_source());
 
                 // keep the state consistent
                 let left = self.ast.push(Node::Integer(0));
