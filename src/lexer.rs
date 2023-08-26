@@ -9,6 +9,8 @@ pub enum Token {
 
     Integer(i64),
     Float(f64),
+
+    EOF,
 }
 
 #[derive(Copy, Clone, Debug)]
