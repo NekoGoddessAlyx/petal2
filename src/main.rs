@@ -1,3 +1,5 @@
+use std::fs::read_to_string;
+
 use crate::interpreter::interpret;
 use crate::lexer::lex;
 use crate::parser::parse;
@@ -11,7 +13,7 @@ fn callback(message: &'static str) {
 }
 
 fn main() {
-    let source = "1 + -2 * 3\n * -4";
+    let source = read_to_string("scripts/test.pt").expect("Could not read test script");
 
     let (tokens, sources) = lex(callback, source);
     println!("Tokens: {:?}", tokens);

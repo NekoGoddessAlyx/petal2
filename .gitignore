@@ -16,3 +16,6 @@ Cargo.lock
 # intellij
 out/
 .idea/
+
+# scripts folder
+scripts/
