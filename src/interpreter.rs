@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter};
 
-use crate::compiler::ast::{Ast, BinOp, Node, UnOp};
+use crate::compiler::ast::{Ast, BinOp, Expr, Node, Stat, UnOp};
 
 #[derive(Copy, Clone, Debug)]
 pub enum Value {
@@ -90,15 +90,21 @@ pub fn interpret(ast: Ast) -> Value {
 
     for (i, node) in ast.into_iter().enumerate() {
         let result = match node {
-            Node::Integer(v) => Value::Integer(v),
-            Node::Float(v) => Value::Float(v),
-            Node::UnOp(op, right) => {
+            // statements
+            Node::Stat(Stat::Expr(expression)) => {
+                get(&mut state, expression)
+            }
+
+            // expression
+            Node::Expr(Expr::Integer(v)) => Value::Integer(v),
+            Node::Expr(Expr::Float(v)) => Value::Float(v),
+            Node::Expr(Expr::UnOp(op, right)) => {
                 let right = get(&mut state, right);
                 match op {
                     UnOp::Neg => -right,
                 }
             }
-            Node::BinOp(op, left, right) => {
+            Node::Expr(Expr::BinOp(op, left, right)) => {
                 let left = get(&mut state, left);
                 let right = get(&mut state, right);
                 match op {

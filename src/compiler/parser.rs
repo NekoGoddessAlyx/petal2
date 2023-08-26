@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::compiler::ast::{Ast, BinOp, Node, NodeRef, UnOp};
+use crate::compiler::ast::{Ast, BinOp, Expr, NodeRef, Stat, UnOp};
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::{Source, Token};
 
@@ -33,12 +33,20 @@ pub fn parse<C: Callback>(callback: C, tokens: &[Token], sources: &[Source]) -> 
         ast: Ast::new(len),
     };
 
-    parser.push_state(State::BeginExpression(Precedence::root()));
+    parser.push_state(State::BeginStatement);
     parser.parse()
 }
 
 #[derive(Debug)]
 enum State {
+    // statements
+    BeginStatement,
+    EndStatement(NodeRef),
+
+    BeginExpressionStatement,
+    EndExpressionStatement,
+
+    // expressions
     BeginExpression(Precedence),
     EndExpression(NodeRef),
     BeginExpressionInfix(Precedence, NodeRef),
@@ -59,8 +67,38 @@ impl State {
         }
 
         match *self {
+            // statements
+            State::BeginStatement => match from {
+                // only valid while statement is the root
+                None => {
+                    parser.begin_statement();
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            }
+            State::EndStatement(..) => match from {
+                Some(State::EndExpressionStatement) => Ok(()),
+                _ => fail_transfer!(),
+            }
+
+            State::BeginExpressionStatement => match from {
+                Some(State::BeginStatement) => {
+                    parser.begin_expression_statement();
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            }
+            State::EndExpressionStatement => match from {
+                Some(State::EndExpression(expression)) => {
+                    parser.end_expression_statement(expression);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            }
+
+            // expressions
             State::BeginExpression(precedence) => match from {
-                None | // <- only valid while expression is the root
+                Some(State::BeginExpressionStatement) |
                 Some(State::BeginExpression(..)) |
                 Some(State::BeginExpressionInfix(..)) => {
                     parser.begin_expression(precedence);
@@ -120,6 +158,12 @@ impl<C: Callback> Parser<'_, C> {
         self.tokens.get(self.cursor).copied().unwrap_or(Token::EOF)
     }
 
+    fn skip_nl(&mut self) {
+        while let Token::NL = self.peek() {
+            self.advance();
+        }
+    }
+
     fn peek_source(&self) -> Option<Source> {
         self.sources.get(self.cursor)
             .xor(self.sources.last())
@@ -130,6 +174,16 @@ impl<C: Callback> Parser<'_, C> {
         let token = self.tokens[self.cursor];
         self.cursor += 1;
         token
+    }
+
+    fn end_of_statement(&mut self) {
+        match self.peek() {
+            Token::NL |
+            Token::EOF => {}
+            _ => {
+                self.on_error(&"Expected end of statement", self.peek_source());
+            }
+        }
     }
 
     fn push_state(&mut self, state: State) {
@@ -150,15 +204,42 @@ impl<C: Callback> Parser<'_, C> {
             previous = Some(state);
         }
 
+        if self.peek() != Token::EOF {
+            self.on_error(&"Could not read all tokens", self.peek_source());
+        }
+
         match self.had_error {
             true => Err(ParserError::FailedParse),
             false => Ok(self.ast),
         }
     }
 
+    // statements
+
+    fn begin_statement(&mut self) {
+        self.skip_nl();
+        match self.peek() {
+            _ => {
+                self.push_state(State::BeginExpressionStatement);
+            }
+        }
+    }
+
+    fn begin_expression_statement(&mut self) {
+        self.push_state(State::EndExpressionStatement);
+        self.push_state(State::BeginExpression(Precedence::root()));
+    }
+
+    fn end_expression_statement(&mut self, expression: NodeRef) {
+        let statement = self.ast.push(Stat::Expr(expression));
+        self.push_state(State::EndStatement(statement));
+        self.end_of_statement();
+    }
+
     // expressions
 
     fn begin_expression(&mut self, precedence: Precedence) {
+        self.skip_nl();
         match self.peek() {
             Token::Sub => {
                 self.advance();
@@ -167,25 +248,26 @@ impl<C: Callback> Parser<'_, C> {
             }
             Token::Integer(v) => {
                 self.advance();
-                let left = self.ast.push(Node::Integer(v));
+                let left = self.ast.push(Expr::Integer(v));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
             Token::Float(v) => {
                 self.advance();
-                let left = self.ast.push(Node::Float(v));
+                let left = self.ast.push(Expr::Float(v));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
             _ => {
                 self.on_error(&"Expected expression", self.peek_source());
 
                 // keep the state consistent
-                let left = self.ast.push(Node::Integer(0));
+                let left = self.ast.push(Expr::Integer(0));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
         }
     }
 
     fn begin_expression_infix(&mut self, precedence: Precedence, left: NodeRef) {
+        // do *not* skip newlines
         let next_token = self.peek();
         let next_precedence = get_precedence(next_token);
 
@@ -222,12 +304,12 @@ impl<C: Callback> Parser<'_, C> {
     }
 
     fn end_prefix_expression(&mut self, precedence: Precedence, op: UnOp, right: NodeRef) {
-        let left = self.ast.push(Node::UnOp(op, right));
+        let left = self.ast.push(Expr::UnOp(op, right));
         self.push_state(State::BeginExpressionInfix(precedence, left));
     }
 
     fn end_binary_expression(&mut self, precedence: Precedence, op: BinOp, left: NodeRef, right: NodeRef) {
-        let left = self.ast.push(Node::BinOp(op, left, right));
+        let left = self.ast.push(Expr::BinOp(op, left, right));
         self.push_state(State::BeginExpressionInfix(precedence, left));
     }
 }
@@ -264,6 +346,7 @@ fn get_precedence(token: Token) -> Precedence {
         Token::Div => Precedence::Multiplicative,
         Token::Integer(_) |
         Token::Float(_) |
+        Token::NL |
         Token::EOF => Precedence::None,
     }
 }

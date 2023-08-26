@@ -12,9 +12,9 @@ impl Ast {
         self.0.len()
     }
 
-    pub(super) fn push(&mut self, node: Node) -> NodeRef {
+    pub(super) fn push<N: Into<Node>>(&mut self, node: N) -> NodeRef {
         let index = self.0.len();
-        self.0.push(node);
+        self.0.push(node.into());
         NodeRef(index as u32)
     }
 }
@@ -38,6 +38,29 @@ impl Index<NodeRef> for Ast {
 
 #[derive(Debug)]
 pub enum Node {
+    Stat(Stat),
+    Expr(Expr),
+}
+
+impl From<Stat> for Node {
+    fn from(value: Stat) -> Self {
+        Node::Stat(value)
+    }
+}
+
+impl From<Expr> for Node {
+    fn from(value: Expr) -> Self {
+        Node::Expr(value)
+    }
+}
+
+#[derive(Debug)]
+pub enum Stat {
+    Expr(NodeRef),
+}
+
+#[derive(Debug)]
+pub enum Expr {
     Integer(i64),
     Float(f64),
     UnOp(UnOp, NodeRef),

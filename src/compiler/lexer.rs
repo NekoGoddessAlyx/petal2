@@ -18,7 +18,7 @@ impl Display for LexerMessage {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum Token {
     Add,
     Sub,
@@ -28,6 +28,7 @@ pub enum Token {
     Integer(i64),
     Float(f64),
 
+    NL,
     EOF,
 }
 
@@ -117,6 +118,8 @@ impl<C: Callback> Lexer<'_, C> {
     }
 
     fn push_token(&mut self, token: Token) {
+        debug_assert_ne!(token, Token::EOF);
+
         self.tokens.push(token);
         self.sources.push(self.token_source());
     }
@@ -143,6 +146,7 @@ impl<C: Callback> Lexer<'_, C> {
             }
         }
 
+        self.push_token(Token::NL);
         self.line_number += 1;
         self.line_spans.push(self.line_cursor);
         self.line_cursor.start = self.line_cursor.end;
