@@ -5,6 +5,7 @@ use crate::interpreter::interpret;
 
 mod interpreter;
 mod compiler;
+mod pretty_formatter;
 
 fn callback(message: CompilerMessage) {
     println!("{}", message);
@@ -24,6 +25,8 @@ fn main() {
             return;
         }
     };
+
+    println!("{}", ast);
 
     let result = interpret(ast);
     println!("Result: {}", result);
