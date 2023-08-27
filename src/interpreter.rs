@@ -84,7 +84,7 @@ pub fn interpret(ast: Ast) -> Value {
     assert_ne!(ast.len(), 0);
     let mut state = vec![Value::Integer(0); ast.len()];
 
-    fn get(state: &mut Vec<Value>, index: impl Into<usize>) -> Value {
+    fn get(state: &mut [Value], index: impl Into<usize>) -> Value {
         state[index.into()]
     }
 

@@ -155,11 +155,11 @@ impl<C: Callback> Parser<'_, C> {
     }
 
     fn peek(&self) -> Token {
-        self.tokens.get(self.cursor).copied().unwrap_or(Token::EOF)
+        self.tokens.get(self.cursor).copied().unwrap_or(Token::Eof)
     }
 
     fn skip_nl(&mut self) {
-        while let Token::NL = self.peek() {
+        while let Token::Nl = self.peek() {
             self.advance();
         }
     }
@@ -178,8 +178,8 @@ impl<C: Callback> Parser<'_, C> {
 
     fn end_of_statement(&mut self) {
         match self.peek() {
-            Token::NL |
-            Token::EOF => {}
+            Token::Nl |
+            Token::Eof => {}
             _ => {
                 self.on_error(&"Expected end of statement", self.peek_source());
             }
@@ -204,7 +204,7 @@ impl<C: Callback> Parser<'_, C> {
             previous = Some(state);
         }
 
-        if self.peek() != Token::EOF {
+        if self.peek() != Token::Eof {
             self.on_error(&"Could not read all tokens", self.peek_source());
         }
 
@@ -346,7 +346,7 @@ fn get_precedence(token: Token) -> Precedence {
         Token::Div => Precedence::Multiplicative,
         Token::Integer(_) |
         Token::Float(_) |
-        Token::NL |
-        Token::EOF => Precedence::None,
+        Token::Nl |
+        Token::Eof => Precedence::None,
     }
 }
