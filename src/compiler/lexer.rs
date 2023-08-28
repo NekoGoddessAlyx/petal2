@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+use std::num::NonZeroU32;
 use std::ops::RangeInclusive;
 use std::str::{from_utf8, FromStr};
 
@@ -49,7 +50,31 @@ pub struct Span {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct LineNumber(pub(super) u32);
+pub struct LineNumber(NonZeroU32);
+
+impl LineNumber {
+    fn new(value: u32) -> Self {
+        assert_ne!(value, 0, "Line numbers are 1-indexed");
+        /// SAFETY: already checked
+        Self(unsafe { NonZeroU32::new_unchecked(value) })
+    }
+    #[inline]
+    fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl From<LineNumber> for u32 {
+    fn from(value: LineNumber) -> Self {
+        value.get()
+    }
+}
+
+impl From<LineNumber> for usize {
+    fn from(value: LineNumber) -> Self {
+        value.get() as usize
+    }
+}
 
 #[derive(Debug)]
 pub struct Source<'source> {
@@ -65,14 +90,9 @@ impl<'source> Source<'source> {
         self.bytes.get(span.start as usize..span.end as usize)
     }
 
-    pub fn get_line_span(&self, line_number: LineNumber) -> Option<Span> {
-        // TODO: this shouldn't happen
-        // maybe make LineNumber store a NonZeroU32?
-        if line_number.0 == 0 {
-            return None;
-        }
-
-        let index = line_number.0.saturating_sub(1) as usize;
+    pub fn get_line_span(&self, line_number: impl Into<usize>) -> Option<Span> {
+        let line_number: usize = line_number.into();
+        let index = line_number.saturating_sub(1);
         let start = self.line_starts.get(index).copied()?;
         let end = self.line_starts
             .get(index + 1)
@@ -91,8 +111,8 @@ impl<'source> Source<'source> {
 
     fn index_to_line_number(&self, index: u32) -> LineNumber {
         match self.line_starts.binary_search(&index) {
-            Ok(line_number) => LineNumber(line_number.saturating_add(1) as u32),
-            Err(line_number) => LineNumber(line_number as u32),
+            Ok(line_number) => LineNumber::new(line_number.saturating_add(1) as u32),
+            Err(line_number) => LineNumber::new(line_number as u32),
         }
     }
 }

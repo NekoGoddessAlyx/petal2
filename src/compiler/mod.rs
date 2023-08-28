@@ -30,7 +30,7 @@ impl CompilerMessage<'_> {
     }
 
     pub fn line_number(&self) -> Option<u32> {
-        self.at.map(|at| self.source.get_line_numbers(at).start().0)
+        self.at.map(|at| (*self.source.get_line_numbers(at).start()).into())
     }
 }
 
@@ -42,7 +42,7 @@ impl Display for CompilerMessage<'_> {
         if let Some(at) = self.at {
             writeln!(f)?;
 
-            let line_number = *source.get_line_numbers(at).start();
+            let line_number: usize = (*source.get_line_numbers(at).start()).into();
 
             let line_span = source
                 .get_line_span(line_number).unwrap_or(at);
@@ -67,14 +67,12 @@ impl Display for CompilerMessage<'_> {
                         .map(|preceding| preceding.trim_start().len())
                         .unwrap_or(0);
 
+                    // ilog10() + 1 is the number of digits in line_number
                     // magic number 6: the number of characters in "[line ]",
                     // excluding the ']' because that's getting replaced with '|'
-                    let indent = match line_number.0 {
-                        0 => 1,
-                        v => v.ilog10() as usize + 1
-                    } + 6;
+                    let indent = line_number.ilog10() as usize + 1 + 6;
 
-                    write!(f, "[line {}] {}", line_number.0, source_line)?;
+                    write!(f, "[line {}] {}", line_number, source_line)?;
 
                     // render a line of carets under the offending token/span
                     // this only works correctly if the line is ascii
@@ -86,7 +84,7 @@ impl Display for CompilerMessage<'_> {
                     }
                 }
                 None => {
-                    write!(f, "[line {}] (could not display source)", line_number.0)?;
+                    write!(f, "[line {}] (could not display source)", line_number)?;
                 }
             };
         }
