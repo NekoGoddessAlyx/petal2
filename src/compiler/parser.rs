@@ -166,7 +166,7 @@ impl<C: Callback> Parser<'_, C> {
 
     fn peek_source(&self) -> Option<Source> {
         self.sources.get(self.cursor)
-            .xor(self.sources.last())
+            .or(self.sources.last())
             .copied()
     }
 
