@@ -1,11 +1,6 @@
 use std::fs::read_to_string;
 
-use crate::compiler::{compile, CompilerMessage};
-use crate::interpreter::interpret;
-
-mod interpreter;
-mod compiler;
-mod pretty_formatter;
+use petal2::{compile, CompilerMessage, interpret};
 
 fn callback(message: CompilerMessage) {
     println!("{}", message);
