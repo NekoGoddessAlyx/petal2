@@ -27,7 +27,7 @@ pub fn parse<C: ParserCallback>(callback: C, tokens: &[Token], locations: &[Span
         callback,
         had_error: false,
         tokens,
-        locations: locations,
+        locations,
         cursor: 0,
         state: Vec::with_capacity(32),
         ast: Ast::new(len),

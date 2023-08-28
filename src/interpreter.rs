@@ -84,7 +84,7 @@ impl Display for Value {
 }
 
 pub fn interpret(ast: Ast) -> Value {
-    assert_ne!(ast.len(), 0);
+    assert!(!ast.is_empty());
     let mut state = vec![Value::Integer(0); ast.len()];
 
     fn get(state: &mut [Value], index: impl Into<usize>) -> Value {

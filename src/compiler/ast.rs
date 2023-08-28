@@ -15,6 +15,10 @@ impl Ast {
         self.0.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub(super) fn push<N: Into<Node>>(&mut self, node: N) -> NodeRef {
         let index = self.0.len();
         self.0.push(node.into());
@@ -144,7 +148,7 @@ impl From<Error> for PrinterErr {
 
 impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
     fn new(ast: &'ast Ast, f: &'formatter mut Formatter<'_>) -> Self {
-        assert_ne!(ast.len(), 0, "Ast is empty");
+        assert!(!ast.is_empty(), "Ast is empty");
 
         Self {
             f: PrettyFormatter::new(f),
