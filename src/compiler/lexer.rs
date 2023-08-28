@@ -1,19 +1,23 @@
 use std::fmt::{Display, Formatter};
 use std::str::{from_utf8, FromStr};
 
-use crate::compiler::callback::LexerCallback;
 use crate::static_assert_size;
 
-pub enum LexerMessage {
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum LexerErr {
     UnexpectedCharacter(u8),
+    FailedNumberParse,
 }
 
-impl Display for LexerMessage {
+impl Display for LexerErr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            LexerMessage::UnexpectedCharacter(c) => {
+            LexerErr::UnexpectedCharacter(c) => {
                 let char = char::from_u32(*c as u32).unwrap_or(char::REPLACEMENT_CHARACTER);
                 write!(f, "Unexpected character '{}'", char)
+            }
+            LexerErr::FailedNumberParse => {
+                write!(f, "Failed to parse number")
             }
         }
     }
@@ -31,6 +35,8 @@ pub enum Token {
 
     Nl,
     Eof,
+
+    Err(LexerErr),
 }
 
 static_assert_size!(Token, 16);
@@ -57,10 +63,8 @@ pub struct Tokens {
     pub line_starts: Box<[u32]>,
 }
 
-pub fn lex<C: LexerCallback, S: AsRef<[u8]>>(callback: C, source: S) -> Tokens {
-    let source = source.as_ref();
+pub fn lex(source: &[u8]) -> Tokens {
     let mut lexer = Lexer {
-        callback,
         source,
         buffer: Vec::with_capacity(16),
         cursor: Span { start: 0, end: 0 },
@@ -88,8 +92,7 @@ pub fn lex<C: LexerCallback, S: AsRef<[u8]>>(callback: C, source: S) -> Tokens {
     }
 }
 
-struct Lexer<'source, C> {
-    callback: C,
+struct Lexer<'source> {
     source: &'source [u8],
     buffer: Vec<u8>,
     cursor: Span,
@@ -100,35 +103,9 @@ struct Lexer<'source, C> {
     line_starts: Vec<u32>,
 }
 
-impl<C: LexerCallback> Lexer<'_, C> {
-    // TODO: A better approach might be to emit an error token with an enum describing which error?
-    // The parser could then emit an error with all information available
-    fn on_error(&mut self, message: &dyn Display, source: Option<Source>) {
-        (self.callback)(message, source.map(|source| {
-            // The lexer knows where the current line starts but not where it ends
-            // (or rather when the next line begins)
-            // Will have to crawl the source to find it
-            // For meow, this will result in repeated work but...
-            // TODO: cache the next line end when it's found
-            // If anything goes wrong while trying to get the current line,
-            // just pretend the span is the whole line
-            let line_start = self.line_starts
-                .get(source.line_number.0.saturating_sub(1) as usize)
-                .copied()
-                .unwrap_or(source.span.start);
-            let line_end = self.source
-                .iter()
-                .enumerate()
-                .skip(self.line_cursor.end as usize)
-                .skip_while(|(_, c)| !matches!(c, b'\r' | b'\n'))
-                .next()
-                .map(|(index, _)| index as u32)
-                .unwrap_or(source.span.end);
-            (source, Span {
-                start: line_start,
-                end: line_end,
-            })
-        }))
+impl Lexer<'_> {
+    fn on_error(&mut self, err: LexerErr) {
+        self.push_token(Token::Err(err));
     }
 
     fn peek(&self, n: usize) -> Option<u8> {
@@ -217,10 +194,7 @@ impl<C: LexerCallback> Lexer<'_, C> {
             Some(c) if c.is_ascii_digit() => self.read_number(),
             Some(c) => {
                 self.advance(1);
-                self.on_error(
-                    &LexerMessage::UnexpectedCharacter(c),
-                    Some(self.token_source()),
-                );
+                self.on_error(LexerErr::UnexpectedCharacter(c));
             }
             None => {}
         }
@@ -262,7 +236,7 @@ impl<C: LexerCallback> Lexer<'_, C> {
                 self.push_token(Token::Float(f));
             }
             None => {
-                self.on_error(&"Failed to parse number", Some(self.token_source()));
+                self.on_error(LexerErr::FailedNumberParse);
                 self.push_token(Token::Float(f64::NAN));
             }
         }

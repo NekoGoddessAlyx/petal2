@@ -101,22 +101,7 @@ pub fn compile<C, S>(mut callback: C, source: S) -> Result<Ast, ParserError>
     where C: FnMut(CompilerMessage),
           S: AsRef<[u8]> {
     let source = source.as_ref();
-
-    let lexer_callback = |message: &dyn Display, at: Option<(Source, Span)>| {
-        let message = CompilerMessage {
-            message,
-            source_information: at.map(|(at, line_span)| {
-                SourceInformation {
-                    source,
-                    at,
-                    line_span,
-                }
-            }),
-        };
-        callback(message);
-    };
-
-    let tokens = lex(lexer_callback, source);
+    let tokens = lex(source);
     println!("Tokens: {:?}", tokens.tokens);
     println!("Sources: {:?}", tokens.sources);
     println!("Line Starts: {:?}", tokens.line_starts);
@@ -155,11 +140,7 @@ pub fn compile<C, S>(mut callback: C, source: S) -> Result<Ast, ParserError>
 mod callback {
     use std::fmt::Display;
 
-    use crate::compiler::lexer::{Source, Span};
-
-    pub trait LexerCallback: FnMut(&dyn Display, Option<(Source, Span)>) {}
-
-    impl<T: FnMut(&dyn Display, Option<(Source, Span)>)> LexerCallback for T {}
+    use crate::compiler::lexer::Source;
 
     pub trait ParserCallback: FnMut(&dyn Display, Option<Source>) {}
 

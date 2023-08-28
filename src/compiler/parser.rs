@@ -154,8 +154,18 @@ impl<C: ParserCallback> Parser<'_, C> {
         (self.callback)(message, source);
     }
 
-    fn peek(&self) -> Token {
-        self.tokens.get(self.cursor).copied().unwrap_or(Token::Eof)
+    fn peek(&mut self) -> Token {
+        let mut token = self.tokens.get(self.cursor);
+
+        // Report error tokens, advance and continue
+        while let Some(Token::Err(err)) = token {
+            let source = self.sources.get(self.cursor).copied();
+            self.on_error(&err, source);
+            self.advance();
+            token = self.tokens.get(self.cursor);
+        }
+
+        token.copied().unwrap_or(Token::Eof)
     }
 
     fn skip_nl(&mut self) {
@@ -348,6 +358,7 @@ fn get_precedence(token: Token) -> Precedence {
         Token::Integer(_) |
         Token::Float(_) |
         Token::Nl |
-        Token::Eof => Precedence::None,
+        Token::Eof |
+        Token::Err(_) => Precedence::None,
     }
 }
