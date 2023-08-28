@@ -80,9 +80,19 @@ pub fn lex(source: &[u8]) -> Tokens {
         lexer.read_next();
     }
 
+    lexer.start_cursor();
+    lexer.tokens.push(Token::Eof);
+    lexer.sources.push(Source {
+        span: lexer.cursor,
+        line_number: LineNumber(lexer.line_number),
+    });
+
     let tokens = lexer.tokens.into_boxed_slice();
     let sources = lexer.sources.into_boxed_slice();
     let line_starts = lexer.line_starts.into_boxed_slice();
+    assert!(!tokens.is_empty(), "Tokens is empty");
+    assert!(!sources.is_empty(), "Sources is empty");
+    assert!(!line_starts.is_empty(), "Line starts is empty");
     assert_eq!(tokens.len(), sources.len(), "Mismatch between tokens and sources");
     assert_eq!(line_starts.len(), lexer.line_number as usize, "Mismatch between line sources and line number");
     Tokens {
