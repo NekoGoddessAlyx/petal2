@@ -51,19 +51,23 @@ pub struct Span {
 pub struct LineNumber(pub(super) u32);
 
 #[derive(Copy, Clone, Debug)]
-pub struct Source {
+pub struct SourceLocation {
     pub span: Span,
     pub line_number: LineNumber,
 }
 
 #[derive(Debug)]
-pub struct Tokens {
+pub struct Source<'source> {
+    pub bytes: &'source [u8],
     pub tokens: Box<[Token]>,
-    pub sources: Box<[Source]>,
+    // TODO: change these locations to Spans
+    // with all this information, the line numbers don't even need to be stored anymore
+    // it can be binary searched from the line_starts array
+    pub locations: Box<[SourceLocation]>,
     pub line_starts: Box<[u32]>,
 }
 
-pub fn lex(source: &[u8]) -> Tokens {
+pub fn lex(source: &[u8]) -> Source {
     let mut lexer = Lexer {
         source,
         buffer: Vec::with_capacity(16),
@@ -71,7 +75,7 @@ pub fn lex(source: &[u8]) -> Tokens {
         line_cursor: Span { start: 0, end: 0 },
         line_number: 1,
         tokens: Vec::with_capacity(64),
-        sources: Vec::with_capacity(64),
+        locations: Vec::with_capacity(64),
         line_starts: Vec::with_capacity(32),
     };
 
@@ -82,22 +86,23 @@ pub fn lex(source: &[u8]) -> Tokens {
 
     lexer.start_cursor();
     lexer.tokens.push(Token::Eof);
-    lexer.sources.push(Source {
+    lexer.locations.push(SourceLocation {
         span: lexer.cursor,
         line_number: LineNumber(lexer.line_number),
     });
 
     let tokens = lexer.tokens.into_boxed_slice();
-    let sources = lexer.sources.into_boxed_slice();
+    let locations = lexer.locations.into_boxed_slice();
     let line_starts = lexer.line_starts.into_boxed_slice();
     assert!(!tokens.is_empty(), "Tokens is empty");
-    assert!(!sources.is_empty(), "Sources is empty");
+    assert!(!locations.is_empty(), "Locations is empty");
     assert!(!line_starts.is_empty(), "Line starts is empty");
-    assert_eq!(tokens.len(), sources.len(), "Mismatch between tokens and sources");
+    assert_eq!(tokens.len(), locations.len(), "Mismatch between tokens and locations");
     assert_eq!(line_starts.len(), lexer.line_number as usize, "Mismatch between line sources and line number");
-    Tokens {
+    Source {
+        bytes: source,
         tokens,
-        sources,
+        locations,
         line_starts,
     }
 }
@@ -109,7 +114,7 @@ struct Lexer<'source> {
     line_cursor: Span,
     line_number: u32,
     tokens: Vec<Token>,
-    sources: Vec<Source>,
+    locations: Vec<SourceLocation>,
     line_starts: Vec<u32>,
 }
 
@@ -137,8 +142,8 @@ impl Lexer<'_> {
         self.cursor.start = self.cursor.end;
     }
 
-    fn token_source(&self) -> Source {
-        Source {
+    fn token_location(&self) -> SourceLocation {
+        SourceLocation {
             span: self.cursor,
             line_number: LineNumber(self.line_number),
         }
@@ -148,7 +153,7 @@ impl Lexer<'_> {
         debug_assert_ne!(token, Token::Eof);
 
         self.tokens.push(token);
-        self.sources.push(self.token_source());
+        self.locations.push(self.token_location());
     }
 
     fn skip_whitespace(&mut self) {

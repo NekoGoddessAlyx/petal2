@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::compiler::ast::{Ast, BinOp, Expr, NodeRef, Stat, UnOp};
 use crate::compiler::callback::ParserCallback;
-use crate::compiler::lexer::{Source, Token};
+use crate::compiler::lexer::{SourceLocation, Token};
 
 #[derive(Debug)]
 pub enum ParserError {
@@ -21,7 +21,7 @@ pub enum StateError {
     CannotTransfer,
 }
 
-pub fn parse<C: ParserCallback>(callback: C, tokens: &[Token], sources: &[Source]) -> Result<Ast, ParserError> {
+pub fn parse<C: ParserCallback>(callback: C, tokens: &[Token], sources: &[SourceLocation]) -> Result<Ast, ParserError> {
     let len = tokens.len();
     let mut parser = Parser {
         callback,
@@ -142,14 +142,14 @@ struct Parser<'tokens, C> {
     callback: C,
     had_error: bool,
     tokens: &'tokens [Token],
-    sources: &'tokens [Source],
+    sources: &'tokens [SourceLocation],
     cursor: usize,
     state: Vec<State>,
     ast: Ast,
 }
 
 impl<C: ParserCallback> Parser<'_, C> {
-    fn on_error(&mut self, message: &dyn Display, source: Option<Source>) {
+    fn on_error(&mut self, message: &dyn Display, source: Option<SourceLocation>) {
         self.had_error = true;
         (self.callback)(message, source);
     }
@@ -174,7 +174,7 @@ impl<C: ParserCallback> Parser<'_, C> {
         }
     }
 
-    fn peek_source(&self) -> Option<Source> {
+    fn peek_source(&self) -> Option<SourceLocation> {
         self.sources.get(self.cursor)
             .or(self.sources.last())
             .copied()

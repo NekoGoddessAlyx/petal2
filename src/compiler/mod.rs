@@ -2,7 +2,7 @@ use std::fmt::{Display, Formatter};
 use std::str::from_utf8;
 
 use crate::compiler::ast::Ast;
-use crate::compiler::lexer::{lex, Source, Span};
+use crate::compiler::lexer::{lex, SourceLocation, Span};
 use crate::compiler::parser::{parse, ParserError};
 
 mod lexer;
@@ -24,7 +24,7 @@ pub struct CompilerMessage<'compiler> {
 
 struct SourceInformation<'source> {
     source: &'source [u8],
-    at: Source,
+    at: SourceLocation,
     line_span: Span,
 }
 
@@ -100,29 +100,28 @@ impl Display for CompilerMessage<'_> {
 pub fn compile<C, S>(mut callback: C, source: S) -> Result<Ast, ParserError>
     where C: FnMut(CompilerMessage),
           S: AsRef<[u8]> {
-    let source = source.as_ref();
-    let tokens = lex(source);
-    println!("Tokens: {:?}", tokens.tokens);
-    println!("Sources: {:?}", tokens.sources);
-    println!("Line Starts: {:?}", tokens.line_starts);
+    let source = lex(source.as_ref());
+    println!("Tokens: {:?}", source.tokens);
+    println!("Locations: {:?}", source.locations);
+    println!("Line Starts: {:?}", source.line_starts);
 
-    let parser_callback = |message: &dyn Display, at: Option<Source>| {
+    let parser_callback = |message: &dyn Display, at: Option<SourceLocation>| {
         let message = CompilerMessage {
             message,
             source_information: at.map(|at| {
                 SourceInformation {
-                    source,
+                    source: source.bytes,
                     at,
                     line_span: {
                         let line_number = at.line_number.0 as usize;
-                        let start = tokens.line_starts
+                        let start = source.line_starts
                             .get(line_number.saturating_sub(1))
                             .copied()
                             .unwrap_or(at.span.start);
-                        let end = tokens.line_starts
+                        let end = source.line_starts
                             .get(line_number)
                             .copied()
-                            .unwrap_or(source.len() as u32);
+                            .unwrap_or(source.bytes.len() as u32);
                         Span {
                             start,
                             end,
@@ -134,15 +133,15 @@ pub fn compile<C, S>(mut callback: C, source: S) -> Result<Ast, ParserError>
         callback(message);
     };
 
-    parse(parser_callback, &tokens.tokens, &tokens.sources)
+    parse(parser_callback, &source.tokens, &source.locations)
 }
 
 mod callback {
     use std::fmt::Display;
 
-    use crate::compiler::lexer::Source;
+    use crate::compiler::lexer::SourceLocation;
 
-    pub trait ParserCallback: FnMut(&dyn Display, Option<Source>) {}
+    pub trait ParserCallback: FnMut(&dyn Display, Option<SourceLocation>) {}
 
-    impl<T: FnMut(&dyn Display, Option<Source>)> ParserCallback for T {}
+    impl<T: FnMut(&dyn Display, Option<SourceLocation>)> ParserCallback for T {}
 }
