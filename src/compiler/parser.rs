@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::compiler::ast::{Ast, BinOp, Expr, NodeRef, Stat, UnOp};
 use crate::compiler::callback::ParserCallback;
-use crate::compiler::lexer::{SourceLocation, Token};
+use crate::compiler::lexer::{Span, Token};
 
 #[derive(Debug)]
 pub enum ParserError {
@@ -21,13 +21,13 @@ pub enum StateError {
     CannotTransfer,
 }
 
-pub fn parse<C: ParserCallback>(callback: C, tokens: &[Token], sources: &[SourceLocation]) -> Result<Ast, ParserError> {
+pub fn parse<C: ParserCallback>(callback: C, tokens: &[Token], locations: &[Span]) -> Result<Ast, ParserError> {
     let len = tokens.len();
     let mut parser = Parser {
         callback,
         had_error: false,
         tokens,
-        sources,
+        locations: locations,
         cursor: 0,
         state: Vec::with_capacity(32),
         ast: Ast::new(len),
@@ -142,14 +142,14 @@ struct Parser<'tokens, C> {
     callback: C,
     had_error: bool,
     tokens: &'tokens [Token],
-    sources: &'tokens [SourceLocation],
+    locations: &'tokens [Span],
     cursor: usize,
     state: Vec<State>,
     ast: Ast,
 }
 
 impl<C: ParserCallback> Parser<'_, C> {
-    fn on_error(&mut self, message: &dyn Display, source: Option<SourceLocation>) {
+    fn on_error(&mut self, message: &dyn Display, source: Option<Span>) {
         self.had_error = true;
         (self.callback)(message, source);
     }
@@ -159,7 +159,7 @@ impl<C: ParserCallback> Parser<'_, C> {
 
         // Report error tokens, advance and continue
         while let Some(Token::Err(err)) = token {
-            let source = self.sources.get(self.cursor).copied();
+            let source = self.locations.get(self.cursor).copied();
             self.on_error(&err, source);
             self.advance();
             token = self.tokens.get(self.cursor);
@@ -174,9 +174,9 @@ impl<C: ParserCallback> Parser<'_, C> {
         }
     }
 
-    fn peek_source(&self) -> Option<SourceLocation> {
-        self.sources.get(self.cursor)
-            .or(self.sources.last())
+    fn peek_location(&self) -> Option<Span> {
+        self.locations.get(self.cursor)
+            .or(self.locations.last())
             .copied()
     }
 
@@ -191,7 +191,7 @@ impl<C: ParserCallback> Parser<'_, C> {
             Token::Nl |
             Token::Eof => {}
             _ => {
-                self.on_error(&"Expected end of statement", self.peek_source());
+                self.on_error(&"Expected end of statement", self.peek_location());
             }
         }
     }
@@ -216,7 +216,7 @@ impl<C: ParserCallback> Parser<'_, C> {
 
         self.skip_nl();
         if self.peek() != Token::Eof {
-            self.on_error(&"Could not read all tokens", self.peek_source());
+            self.on_error(&"Could not read all tokens", self.peek_location());
         }
 
         match self.had_error {
@@ -268,7 +268,7 @@ impl<C: ParserCallback> Parser<'_, C> {
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
             _ => {
-                self.on_error(&"Expected expression", self.peek_source());
+                self.on_error(&"Expected expression", self.peek_location());
 
                 // keep the state consistent
                 let left = self.ast.push(Expr::Integer(0));

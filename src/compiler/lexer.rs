@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+use std::ops::RangeInclusive;
 use std::str::{from_utf8, FromStr};
 
 use crate::static_assert_size;
@@ -50,21 +51,50 @@ pub struct Span {
 #[derive(Copy, Clone, Debug)]
 pub struct LineNumber(pub(super) u32);
 
-#[derive(Copy, Clone, Debug)]
-pub struct SourceLocation {
-    pub span: Span,
-    pub line_number: LineNumber,
-}
-
 #[derive(Debug)]
 pub struct Source<'source> {
     pub bytes: &'source [u8],
     pub tokens: Box<[Token]>,
-    // TODO: change these locations to Spans
-    // with all this information, the line numbers don't even need to be stored anymore
-    // it can be binary searched from the line_starts array
-    pub locations: Box<[SourceLocation]>,
+    pub locations: Box<[Span]>,
     pub line_starts: Box<[u32]>,
+}
+
+impl<'source> Source<'source> {
+    pub fn get_bytes_at(&self, span: Span) -> Option<&'source [u8]> {
+        assert!(span.start <= span.end);
+        self.bytes.get(span.start as usize..span.end as usize)
+    }
+
+    pub fn get_line_span(&self, line_number: LineNumber) -> Option<Span> {
+        // TODO: this shouldn't happen
+        // maybe make LineNumber store a NonZeroU32?
+        if line_number.0 == 0 {
+            return None;
+        }
+
+        let index = line_number.0.saturating_sub(1) as usize;
+        let start = self.line_starts.get(index).copied()?;
+        let end = self.line_starts
+            .get(index + 1)
+            .copied()
+            .unwrap_or(self.bytes.len() as u32);
+        Some(Span { start, end })
+    }
+
+    pub fn get_line_numbers(&self, span: Span) -> RangeInclusive<LineNumber> {
+        assert!(span.start <= span.end);
+
+        let start = self.index_to_line_number(span.start);
+        let end = self.index_to_line_number(span.end);
+        start..=end
+    }
+
+    fn index_to_line_number(&self, index: u32) -> LineNumber {
+        match self.line_starts.binary_search(&index) {
+            Ok(line_number) => LineNumber(line_number.saturating_add(1) as u32),
+            Err(line_number) => LineNumber(line_number as u32),
+        }
+    }
 }
 
 pub fn lex(source: &[u8]) -> Source {
@@ -86,10 +116,7 @@ pub fn lex(source: &[u8]) -> Source {
 
     lexer.start_cursor();
     lexer.tokens.push(Token::Eof);
-    lexer.locations.push(SourceLocation {
-        span: lexer.cursor,
-        line_number: LineNumber(lexer.line_number),
-    });
+    lexer.locations.push(lexer.cursor);
 
     let tokens = lexer.tokens.into_boxed_slice();
     let locations = lexer.locations.into_boxed_slice();
@@ -114,7 +141,7 @@ struct Lexer<'source> {
     line_cursor: Span,
     line_number: u32,
     tokens: Vec<Token>,
-    locations: Vec<SourceLocation>,
+    locations: Vec<Span>,
     line_starts: Vec<u32>,
 }
 
@@ -142,18 +169,11 @@ impl Lexer<'_> {
         self.cursor.start = self.cursor.end;
     }
 
-    fn token_location(&self) -> SourceLocation {
-        SourceLocation {
-            span: self.cursor,
-            line_number: LineNumber(self.line_number),
-        }
-    }
-
     fn push_token(&mut self, token: Token) {
         debug_assert_ne!(token, Token::Eof);
 
         self.tokens.push(token);
-        self.locations.push(self.token_location());
+        self.locations.push(self.cursor);
     }
 
     fn skip_whitespace(&mut self) {
