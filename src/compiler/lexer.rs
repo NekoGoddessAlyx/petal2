@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 use std::str::{from_utf8, FromStr};
 
-use crate::compiler::callback::Callback;
+use crate::compiler::callback::LexerCallback;
 
 pub enum LexerMessage {
     UnexpectedCharacter(u8),
@@ -47,7 +47,14 @@ pub struct Source {
     pub line_number: LineNumber,
 }
 
-pub fn lex<C: Callback, S: AsRef<[u8]>>(callback: C, source: S) -> (Box<[Token]>, Box<[Source]>, Box<[Span]>) {
+#[derive(Debug)]
+pub struct Tokens {
+    pub tokens: Box<[Token]>,
+    pub sources: Box<[Source]>,
+    pub line_starts: Box<[u32]>,
+}
+
+pub fn lex<C: LexerCallback, S: AsRef<[u8]>>(callback: C, source: S) -> Tokens {
     let source = source.as_ref();
     let mut lexer = Lexer {
         callback,
@@ -58,20 +65,24 @@ pub fn lex<C: Callback, S: AsRef<[u8]>>(callback: C, source: S) -> (Box<[Token]>
         line_number: 1,
         tokens: Vec::with_capacity(64),
         sources: Vec::with_capacity(64),
-        line_spans: Vec::with_capacity(32),
+        line_starts: Vec::with_capacity(32),
     };
 
+    lexer.line_starts.push(0);
     while lexer.peek(0).is_some() {
         lexer.read_next();
     }
-    lexer.line_spans.push(lexer.line_cursor);
 
     let tokens = lexer.tokens.into_boxed_slice();
     let sources = lexer.sources.into_boxed_slice();
-    let line_spans = lexer.line_spans.into_boxed_slice();
+    let line_starts = lexer.line_starts.into_boxed_slice();
     assert_eq!(tokens.len(), sources.len(), "Mismatch between tokens and sources");
-    assert_eq!(line_spans.len(), lexer.line_number as usize, "Mismatch between line sources and line number");
-    (tokens, sources, line_spans)
+    assert_eq!(line_starts.len(), lexer.line_number as usize, "Mismatch between line sources and line number");
+    Tokens {
+        tokens,
+        sources,
+        line_starts,
+    }
 }
 
 struct Lexer<'source, C> {
@@ -83,12 +94,38 @@ struct Lexer<'source, C> {
     line_number: u32,
     tokens: Vec<Token>,
     sources: Vec<Source>,
-    line_spans: Vec<Span>,
+    line_starts: Vec<u32>,
 }
 
-impl<C: Callback> Lexer<'_, C> {
+impl<C: LexerCallback> Lexer<'_, C> {
+    // TODO: A better approach might be to emit an error token with an enum describing which error?
+    // The parser could then emit an error with all information available
     fn on_error(&mut self, message: &dyn Display, source: Option<Source>) {
-        (self.callback)(message, source)
+        (self.callback)(message, source.map(|source| {
+            // The lexer knows where the current line starts but not where it ends
+            // (or rather when the next line begins)
+            // Will have to crawl the source to find it
+            // For meow, this will result in repeated work but...
+            // TODO: cache the next line end when it's found
+            // If anything goes wrong while trying to get the current line,
+            // just pretend the span is the whole line
+            let line_start = self.line_starts
+                .get(source.line_number.0.saturating_sub(1) as usize)
+                .copied()
+                .unwrap_or(source.span.start);
+            let line_end = self.source
+                .iter()
+                .enumerate()
+                .skip(self.line_cursor.end as usize)
+                .skip_while(|(_, c)| !matches!(c, b'\r' | b'\n'))
+                .next()
+                .map(|(index, _)| index as u32)
+                .unwrap_or(source.span.end);
+            (source, Span {
+                start: line_start,
+                end: line_end,
+            })
+        }))
     }
 
     fn peek(&self, n: usize) -> Option<u8> {
@@ -148,8 +185,8 @@ impl<C: Callback> Lexer<'_, C> {
 
         self.push_token(Token::Nl);
         self.line_number += 1;
-        self.line_spans.push(self.line_cursor);
         self.line_cursor.start = self.line_cursor.end;
+        self.line_starts.push(self.line_cursor.start);
     }
 
     fn read_next(&mut self) {

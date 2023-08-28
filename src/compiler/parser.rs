@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use crate::compiler::ast::{Ast, BinOp, Expr, NodeRef, Stat, UnOp};
-use crate::compiler::callback::Callback;
+use crate::compiler::callback::ParserCallback;
 use crate::compiler::lexer::{Source, Token};
 
 #[derive(Debug)]
@@ -21,7 +21,7 @@ pub enum StateError {
     CannotTransfer,
 }
 
-pub fn parse<C: Callback>(callback: C, tokens: &[Token], sources: &[Source]) -> Result<Ast, ParserError> {
+pub fn parse<C: ParserCallback>(callback: C, tokens: &[Token], sources: &[Source]) -> Result<Ast, ParserError> {
     let len = tokens.len();
     let mut parser = Parser {
         callback,
@@ -56,7 +56,7 @@ enum State {
 }
 
 impl State {
-    fn enter<C: Callback>(&mut self, from: Option<State>, parser: &mut Parser<'_, C>) -> Result<(), StateError> {
+    fn enter<C: ParserCallback>(&mut self, from: Option<State>, parser: &mut Parser<'_, C>) -> Result<(), StateError> {
         macro_rules! fail_transfer {
             () => {
                 {
@@ -148,7 +148,7 @@ struct Parser<'tokens, C> {
     ast: Ast,
 }
 
-impl<C: Callback> Parser<'_, C> {
+impl<C: ParserCallback> Parser<'_, C> {
     fn on_error(&mut self, message: &dyn Display, source: Option<Source>) {
         self.had_error = true;
         (self.callback)(message, source);
@@ -204,6 +204,7 @@ impl<C: Callback> Parser<'_, C> {
             previous = Some(state);
         }
 
+        self.skip_nl();
         if self.peek() != Token::Eof {
             self.on_error(&"Could not read all tokens", self.peek_source());
         }

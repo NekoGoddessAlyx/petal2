@@ -44,19 +44,51 @@ impl CompilerMessage<'_> {
 impl Display for CompilerMessage<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Error: {}", self.message)?;
+
         if let Some(source) = &self.source_information {
             writeln!(f)?;
-            write!(f, "[line {}]", source.at.line_number.0)?;
 
-            let start = source.line_span.start as usize;
-            let end = source.line_span.end as usize;
-            let source = source.source
-                .get(start..end)
-                .and_then(|source| from_utf8(source).ok());
-            match source {
-                Some(source) => write!(f, " {}", source)?,
-                None => write!(f, " (could not display source)")?,
-            }
+            let line_number = source.at.line_number.0;
+            let source_line = source.source
+                .get(source.line_span.start as usize..source.line_span.end as usize)
+                .and_then(|line| from_utf8(line).ok())
+                .map(|source_line| source_line.trim());
+
+            match source_line {
+                Some(source_line) => {
+                    let caret_len = source.source
+                        .get(source.at.span.start as usize..source.at.span.end as usize)
+                        .and_then(|source| from_utf8(source).ok())
+                        .map(|source| source.trim_end().len().max(1))
+                        .unwrap_or(1);
+                    let padding = source.source
+                        .get(source.line_span.start as usize..source.at.span.start as usize)
+                        .and_then(|preceding| from_utf8(preceding).ok())
+                        .map(|preceding| preceding.trim_start().len())
+                        .unwrap_or(0);
+
+                    // magic number 6: the number of characters in "[line ]",
+                    // excluding the ']' because that's getting replaced with '|'
+                    let indent = match line_number {
+                        0 => 1,
+                        v => v.ilog10() as usize + 1
+                    } + 6;
+
+                    write!(f, "[line {}] {}", line_number, source_line)?;
+
+                    // render a line of carets under the offending token/span
+                    // this only works correctly if the line is ascii
+                    if source_line.is_ascii() {
+                        const EMPTY: &str = "";
+
+                        writeln!(f)?;
+                        write!(f, "{EMPTY:-indent$}| {EMPTY:padding$}{EMPTY:^>caret_len$}")?
+                    }
+                }
+                None => {
+                    write!(f, "[line {}] (could not display source)", line_number)?;
+                }
+            };
         }
 
         Ok(())
@@ -70,24 +102,24 @@ pub fn compile<C, S>(mut callback: C, source: S) -> Result<Ast, ParserError>
           S: AsRef<[u8]> {
     let source = source.as_ref();
 
-    let lexer_callback = |message: &dyn Display, at: Option<Source>| {
+    let lexer_callback = |message: &dyn Display, at: Option<(Source, Span)>| {
         let message = CompilerMessage {
             message,
-            source_information: at.map(|at| {
+            source_information: at.map(|(at, line_span)| {
                 SourceInformation {
                     source,
                     at,
-                    line_span: at.span,
+                    line_span,
                 }
             }),
         };
         callback(message);
     };
 
-    let (tokens, sources, line_spans) = lex(lexer_callback, source);
-    println!("Tokens: {:?}", tokens);
-    println!("Sources: {:?}", sources);
-    println!("Lines: {:?}", line_spans);
+    let tokens = lex(lexer_callback, source);
+    println!("Tokens: {:?}", tokens.tokens);
+    println!("Sources: {:?}", tokens.sources);
+    println!("Line Starts: {:?}", tokens.line_starts);
 
     let parser_callback = |message: &dyn Display, at: Option<Source>| {
         let message = CompilerMessage {
@@ -96,25 +128,40 @@ pub fn compile<C, S>(mut callback: C, source: S) -> Result<Ast, ParserError>
                 SourceInformation {
                     source,
                     at,
-                    line_span: line_spans
-                        .get((at.line_number.0 as usize).saturating_sub(1))
-                        .copied()
-                        .unwrap_or(at.span),
+                    line_span: {
+                        let line_number = at.line_number.0 as usize;
+                        let start = tokens.line_starts
+                            .get(line_number.saturating_sub(1))
+                            .copied()
+                            .unwrap_or(at.span.start);
+                        let end = tokens.line_starts
+                            .get(line_number)
+                            .copied()
+                            .unwrap_or(source.len() as u32);
+                        Span {
+                            start,
+                            end,
+                        }
+                    },
                 }
             }),
         };
         callback(message);
     };
 
-    parse(parser_callback, &tokens, &sources)
+    parse(parser_callback, &tokens.tokens, &tokens.sources)
 }
 
 mod callback {
     use std::fmt::Display;
 
-    use crate::compiler::lexer::Source;
+    use crate::compiler::lexer::{Source, Span};
 
-    pub trait Callback: FnMut(&dyn Display, Option<Source>) {}
+    pub trait LexerCallback: FnMut(&dyn Display, Option<(Source, Span)>) {}
 
-    impl<T: FnMut(&dyn Display, Option<Source>)> Callback for T {}
+    impl<T: FnMut(&dyn Display, Option<(Source, Span)>)> LexerCallback for T {}
+
+    pub trait ParserCallback: FnMut(&dyn Display, Option<Source>) {}
+
+    impl<T: FnMut(&dyn Display, Option<Source>)> ParserCallback for T {}
 }
