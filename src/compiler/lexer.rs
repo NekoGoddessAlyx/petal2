@@ -2,6 +2,7 @@ use std::fmt::{Display, Formatter};
 use std::str::{from_utf8, FromStr};
 
 use crate::compiler::callback::LexerCallback;
+use crate::static_assert_size;
 
 pub enum LexerMessage {
     UnexpectedCharacter(u8),
@@ -31,6 +32,8 @@ pub enum Token {
     Nl,
     Eof,
 }
+
+static_assert_size!(Token, 16);
 
 #[derive(Copy, Clone, Debug)]
 pub struct Span {

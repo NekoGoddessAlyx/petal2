@@ -1,12 +1,15 @@
 use std::fmt::{Display, Formatter};
 
 use crate::compiler::ast::{Ast, BinOp, Expr, Node, Stat, UnOp};
+use crate::static_assert_size;
 
 #[derive(Copy, Clone, Debug)]
 pub enum Value {
     Integer(i64),
     Float(f64),
 }
+
+static_assert_size!(Value, 16);
 
 impl std::ops::Neg for Value {
     type Output = Self;
