@@ -90,7 +90,10 @@ impl std::ops::Div for Value {
 
     fn div(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
-            (Value::Integer(a), Value::Integer(b)) => Value::Integer(a.checked_div(b).unwrap_or(0)),
+            (Value::Integer(a), Value::Integer(b)) => a
+                .checked_div(b)
+                .map(Value::Integer)
+                .unwrap_or(Value::Float(f64::INFINITY)),
             (Value::Integer(a), Value::Float(b)) => Value::Float((a as f64) / b),
             (Value::Float(a), Value::Integer(b)) => Value::Float(a / (b as f64)),
             (Value::Float(a), Value::Float(b)) => Value::Float(a / b),
