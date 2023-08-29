@@ -1,12 +1,13 @@
 use std::fmt::{Display, Formatter};
 use std::str::from_utf8;
 
-use crate::compiler::ast::Ast;
+use crate::compiler::code_gen::code_gen;
 use crate::compiler::lexer::{lex, Source, Span};
-use crate::compiler::parser::{parse, ParserError};
+use crate::compiler::parser::parse;
+use crate::prototype::Prototype;
 
-pub mod ast;
-pub mod code_gen;
+mod ast;
+mod code_gen;
 mod lexer;
 mod parser;
 mod registers;
@@ -97,7 +98,9 @@ impl Display for CompilerMessage<'_> {
 
 // compile
 
-pub fn compile<C, S>(mut callback: C, source: S) -> Result<Ast, ParserError>
+// TODO: Feeling some design tension with the callbacks and the result type.
+// do something
+pub fn compile<C, S>(mut callback: C, source: S) -> Result<Prototype, ()>
 where
     C: FnMut(CompilerMessage),
     S: AsRef<[u8]>,
@@ -115,7 +118,18 @@ where
         });
     };
 
-    parse(parser_callback, &source.tokens, &source.locations)
+    let ast = match parse(parser_callback, &source.tokens, &source.locations) {
+        Ok(ast) => ast,
+        Err(_error) => {
+            return Err(());
+        }
+    };
+    println!("Ast: {:?}", ast);
+
+    match code_gen(ast) {
+        Ok(prototype) => Ok(prototype),
+        Err(_error) => Err(()),
+    }
 }
 
 mod callback {

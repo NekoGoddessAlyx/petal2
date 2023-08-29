@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-use crate::ast::{Ast, BinOp, Expr, Node, NodeRef, RefLen, Stat, UnOp};
+use crate::compiler::ast::{Ast, BinOp, Expr, Node, NodeRef, RefLen, Stat, UnOp};
 use crate::compiler::registers::{Register, Registers};
 use crate::prototype::{ConstantIndex, Instruction, Prototype};
 use crate::value::Value;

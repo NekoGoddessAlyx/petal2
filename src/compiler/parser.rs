@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::ast::RefLen;
+use crate::compiler::ast::RefLen;
 use crate::compiler::ast::{Ast, BinOp, Expr, NodeRef, Stat, UnOp};
 use crate::compiler::callback::ParserCallback;
 use crate::compiler::lexer::{Span, Token};
@@ -22,7 +22,11 @@ pub enum StateError {
     CannotTransfer,
 }
 
-pub fn parse<C: ParserCallback>(callback: C, tokens: &[Token], locations: &[Span]) -> Result<Ast, ParserError> {
+pub fn parse<C: ParserCallback>(
+    callback: C,
+    tokens: &[Token],
+    locations: &[Span],
+) -> Result<Ast, ParserError> {
     let len = tokens.len();
     let mut parser = Parser {
         callback,
@@ -62,30 +66,32 @@ enum State {
 }
 
 impl State {
-    fn enter<C: ParserCallback>(&mut self, from: Option<State>, parser: &mut Parser<'_, C>) -> Result<(), StateError> {
+    fn enter<C: ParserCallback>(
+        &mut self,
+        from: Option<State>,
+        parser: &mut Parser<'_, C>,
+    ) -> Result<(), StateError> {
         macro_rules! fail_transfer {
-            () => {
-                {
-                    dbg!(&from);
-                    Err(StateError::CannotTransfer)
-                }
-            };
+            () => {{
+                dbg!(&from);
+                Err(StateError::CannotTransfer)
+            }};
         }
 
         match *self {
             // statements
             State::BeginStatement => match from {
-                Some(State::BeginCompoundStatement) |
-                Some(State::ContinueCompoundStatement(..)) => {
+                Some(State::BeginCompoundStatement)
+                | Some(State::ContinueCompoundStatement(..)) => {
                     parser.begin_statement();
                     Ok(())
                 }
                 _ => fail_transfer!(),
-            }
+            },
             State::EndStatement(..) => match from {
                 Some(State::EndExpressionStatement) => Ok(()),
                 _ => fail_transfer!(),
-            }
+            },
 
             State::BeginCompoundStatement => match from {
                 // only valid while compound statement is the root
@@ -94,59 +100,59 @@ impl State {
                     Ok(())
                 }
                 _ => fail_transfer!(),
-            }
+            },
             State::ContinueCompoundStatement(len) => match from {
                 Some(State::EndStatement(statement)) => {
                     parser.continue_compound_statement(len, statement);
                     Ok(())
                 }
                 _ => fail_transfer!(),
-            }
+            },
             State::EndCompoundStatement(len) => match from {
                 Some(State::ContinueCompoundStatement(..)) => {
                     parser.end_compound_statement(len);
                     Ok(())
                 }
                 _ => fail_transfer!(),
-            }
+            },
             State::BeginExpressionStatement => match from {
                 Some(State::BeginStatement) => {
                     parser.begin_expression_statement();
                     Ok(())
                 }
                 _ => fail_transfer!(),
-            }
+            },
             State::EndExpressionStatement => match from {
                 Some(State::EndExpression(expression)) => {
                     parser.end_expression_statement(expression);
                     Ok(())
                 }
                 _ => fail_transfer!(),
-            }
+            },
 
             // expressions
             State::BeginExpression(precedence) => match from {
-                Some(State::BeginExpressionStatement) |
-                Some(State::BeginExpression(..)) |
-                Some(State::BeginExpressionInfix(..)) => {
+                Some(State::BeginExpressionStatement)
+                | Some(State::BeginExpression(..))
+                | Some(State::BeginExpressionInfix(..)) => {
                     parser.begin_expression(precedence);
                     Ok(())
                 }
                 _ => fail_transfer!(),
-            }
+            },
             State::EndExpression(..) => match from {
                 Some(State::BeginExpressionInfix(..)) => Ok(()),
                 _ => fail_transfer!(),
-            }
+            },
             State::BeginExpressionInfix(precedence, left) => match from {
-                Some(State::BeginExpression(..)) |
-                Some(State::EndPrefixExpression(..)) |
-                Some(State::EndBinaryExpression(..)) => {
+                Some(State::BeginExpression(..))
+                | Some(State::EndPrefixExpression(..))
+                | Some(State::EndBinaryExpression(..)) => {
                     parser.begin_expression_infix(precedence, left);
                     Ok(())
                 }
                 _ => fail_transfer!(),
-            }
+            },
 
             State::EndPrefixExpression(precedence, op) => match from {
                 Some(State::EndExpression(right)) => {
@@ -154,14 +160,14 @@ impl State {
                     Ok(())
                 }
                 _ => fail_transfer!(),
-            }
+            },
             State::EndBinaryExpression(precedence, op, left) => match from {
                 Some(State::EndExpression(right)) => {
                     parser.end_binary_expression(precedence, op, left, right);
                     Ok(())
                 }
                 _ => fail_transfer!(),
-            }
+            },
         }
     }
 }
@@ -207,7 +213,8 @@ impl<C: ParserCallback> Parser<'_, C> {
     }
 
     fn peek_location(&self) -> Option<Span> {
-        self.locations.get(self.cursor)
+        self.locations
+            .get(self.cursor)
             .or(self.locations.last())
             .copied()
     }
@@ -220,8 +227,7 @@ impl<C: ParserCallback> Parser<'_, C> {
 
     fn end_of_statement(&mut self) {
         match self.peek() {
-            Token::Nl |
-            Token::Eof => {}
+            Token::Nl | Token::Eof => {}
             _ => {
                 self.on_error(&"Expected end of statement", self.peek_location());
             }
@@ -388,7 +394,13 @@ impl<C: ParserCallback> Parser<'_, C> {
         self.push_state(State::BeginExpressionInfix(precedence, left));
     }
 
-    fn end_binary_expression(&mut self, precedence: Precedence, op: BinOp, left: NodeRef, right: NodeRef) {
+    fn end_binary_expression(
+        &mut self,
+        precedence: Precedence,
+        op: BinOp,
+        left: NodeRef,
+        right: NodeRef,
+    ) {
         let left = self.ast.push_node(Expr::BinOp(op, left, right));
         self.push_state(State::BeginExpressionInfix(precedence, left));
     }
@@ -420,15 +432,11 @@ impl Precedence {
 
 fn get_precedence(token: Token) -> Precedence {
     match token {
-        Token::Add |
-        Token::Sub => Precedence::Additive,
-        Token::Mul |
-        Token::Div => Precedence::Multiplicative,
-        Token::Integer(_) |
-        Token::Float(_) |
-        Token::Nl |
-        Token::Eof |
-        Token::Err(_) => Precedence::None,
+        Token::Add | Token::Sub => Precedence::Additive,
+        Token::Mul | Token::Div => Precedence::Multiplicative,
+        Token::Integer(_) | Token::Float(_) | Token::Nl | Token::Eof | Token::Err(_) => {
+            Precedence::None
+        }
     }
 }
 
@@ -441,8 +449,7 @@ fn is_statement(token: Token) -> bool {
 
 fn is_expression(token: Token) -> bool {
     match token {
-        Token::Integer(_) |
-        Token::Float(_) => true,
+        Token::Integer(_) | Token::Float(_) => true,
         _ => false,
     }
 }
