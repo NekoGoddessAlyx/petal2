@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use crate::ast::{Ast, BinOp, Expr, Node, NodeRef, RefLen, Stat, UnOp};
 use crate::compiler::registers::{Register, Registers};
 use crate::prototype::{ConstantIndex, Instruction, Prototype};
-use crate::{PString, Value};
+use crate::value::Value;
+use crate::PString;
 
 #[derive(Debug)]
 pub enum CodeGenError {

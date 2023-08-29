@@ -1,4 +1,5 @@
-use crate::{PString, Value};
+use crate::value::Value;
+use crate::PString;
 
 #[derive(Debug)]
 pub struct Prototype {

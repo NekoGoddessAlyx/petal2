@@ -17,3 +17,4 @@ mod compiler;
 mod interpreter;
 mod pretty_formatter;
 mod prototype;
+mod value;
