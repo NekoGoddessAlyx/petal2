@@ -55,7 +55,7 @@ pub struct LineNumber(NonZeroU32);
 impl LineNumber {
     fn new(value: u32) -> Self {
         assert_ne!(value, 0, "Line numbers are 1-indexed");
-        /// SAFETY: already checked
+        // SAFETY: already checked
         Self(unsafe { NonZeroU32::new_unchecked(value) })
     }
     #[inline]
