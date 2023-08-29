@@ -1,61 +1,69 @@
-use crate::ast::{NodeRef, RefLen};
-use crate::compiler::ast::{Ast, BinOp, Expr, Node, Stat, UnOp};
+use crate::prototype::{ConstantIndex, Instruction, Prototype, Register};
 use crate::value::Value;
 
-pub fn interpret(ast: Ast) -> Value {
-    assert!(!ast.is_empty());
+pub enum InterpretResult {}
 
-    let mut state = vec![Value::Integer(0); ast.len()];
-    let refs = ast.refs();
-    let mut ref_cursor: usize = 0;
+pub fn interpret(function: Prototype) -> Result<Value, InterpretResult> {
+    let instructions = function.instructions.as_ref();
+    let constants = function.constants.as_ref();
 
-    fn get(state: &mut [Value], index: impl Into<usize>) -> Value {
-        state[index.into()]
-    }
+    // Ensure instructions is not empty and ends with a return
+    // or else bad things might happen.
+    // There is currently no checking that register accesses are valid
+    // OR that constant accesses are valid ¯\_(ツ)_/¯
+    // Could do it.
+    // Could.
+    assert!(instructions
+        .last()
+        .is_some_and(|i| matches!(i, Instruction::Return { .. })));
 
-    fn get_last_ref(
-        cursor: &mut usize,
-        refs: &[NodeRef],
-        state: &mut [Value],
-        len: RefLen,
-    ) -> Value {
-        let len: usize = len.into();
-        *cursor += len;
-        let index = refs[cursor.saturating_sub(1)];
-        get(state, index)
-    }
+    let mut stack = Vec::with_capacity(256);
+    let mut pc: usize = 0;
+    stack.resize(function.stack_size as usize + 1, Value::Integer(0));
 
-    for (i, node) in ast.nodes().iter().enumerate() {
-        let result = match node {
-            // statements
-            Node::Stat(Stat::Compound(len)) => {
-                get_last_ref(&mut ref_cursor, refs, &mut state, *len)
-            }
-            Node::Stat(Stat::Expr(expression)) => get(&mut state, *expression),
+    // 🦶🔫
+    let stack = &mut stack as *mut Vec<Value>;
+    let peek = |register: Register| unsafe { *(&*stack).get_unchecked(register as usize) };
+    let mov = |register: Register, value: Value| unsafe {
+        *(&mut *stack).get_unchecked_mut(register as usize) = value;
+    };
+    let get_constant =
+        |constant: ConstantIndex| unsafe { *constants.get_unchecked(constant as usize) };
 
-            // expression
-            Node::Expr(Expr::Integer(v)) => Value::Integer(*v),
-            Node::Expr(Expr::Float(v)) => Value::Float(*v),
-            Node::Expr(Expr::UnOp(op, right)) => {
-                let right = get(&mut state, *right);
-                match op {
-                    UnOp::Neg => -right,
+    unsafe {
+        loop {
+            let instruction = *instructions.get_unchecked(pc);
+            pc += 1;
+            match instruction {
+                Instruction::Return { register } => {
+                    return Ok(peek(register));
                 }
-            }
-            Node::Expr(Expr::BinOp(op, left, right)) => {
-                let left = get(&mut state, *left);
-                let right = get(&mut state, *right);
-                match op {
-                    BinOp::Add => left + right,
-                    BinOp::Sub => left - right,
-                    BinOp::Mul => left * right,
-                    BinOp::Div => left / right,
-                }
-            }
-        };
-        state[i] = result;
+                Instruction::LoadConstant {
+                    destination,
+                    constant,
+                } => mov(destination, get_constant(constant)),
+                Instruction::Neg { destination, right } => mov(destination, -peek(right)),
+                Instruction::Add {
+                    destination,
+                    left,
+                    right,
+                } => mov(destination, peek(left) + peek(right)),
+                Instruction::Sub {
+                    destination,
+                    left,
+                    right,
+                } => mov(destination, peek(left) - peek(right)),
+                Instruction::Mul {
+                    destination,
+                    left,
+                    right,
+                } => mov(destination, peek(left) * peek(right)),
+                Instruction::Div {
+                    destination,
+                    left,
+                    right,
+                } => mov(destination, peek(left) / peek(right)),
+            };
+        }
     }
-
-    let last_index = state.len().saturating_sub(1);
-    get(&mut state, last_index)
 }

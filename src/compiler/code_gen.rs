@@ -212,20 +212,20 @@ impl<'ast, 'prototype> CodeGen<'ast, 'prototype> {
     }
 
     fn finish(&mut self) -> Result<()> {
+        // got ahead of myself
+
         // implicit return of... 0
         // for meow
-        let register = self
-            .registers
-            .allocate_any()
-            .ok_or(CodeGenError::NoRegistersAvailable)?;
-        let constant = self.push_constant(Value::Integer(0))?;
-        self.push_instruction(Instruction::LoadConstant {
-            destination: register.into(),
-            constant,
-        });
-        self.push_instruction(Instruction::Return {
-            register: register.into(),
-        });
+        // let register = self
+        //     .registers
+        //     .allocate_any()
+        //     .ok_or(CodeGenError::NoRegistersAvailable)?;
+        // let constant = self.push_constant(Value::Integer(0))?;
+        // self.push_instruction(Instruction::LoadConstant {
+        //     destination: register.into(),
+        //     constant,
+        // });
+        self.push_instruction(Instruction::Return { register: 0 });
         Ok(())
     }
 
