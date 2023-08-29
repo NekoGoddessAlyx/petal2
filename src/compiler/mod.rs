@@ -5,9 +5,11 @@ use crate::compiler::ast::Ast;
 use crate::compiler::lexer::{lex, Source, Span};
 use crate::compiler::parser::{parse, ParserError};
 
+pub mod ast;
+pub mod code_gen;
 mod lexer;
 mod parser;
-pub mod ast;
+mod registers;
 
 // callback
 
@@ -30,7 +32,8 @@ impl CompilerMessage<'_> {
     }
 
     pub fn line_number(&self) -> Option<u32> {
-        self.at.map(|at| (*self.source.get_line_numbers(at).start()).into())
+        self.at
+            .map(|at| (*self.source.get_line_numbers(at).start()).into())
     }
 }
 
@@ -44,8 +47,7 @@ impl Display for CompilerMessage<'_> {
 
             let line_number: usize = (*source.get_line_numbers(at).start()).into();
 
-            let line_span = source
-                .get_line_span(line_number).unwrap_or(at);
+            let line_span = source.get_line_span(line_number).unwrap_or(at);
             let source_line = source
                 .get_bytes_at(line_span)
                 .and_then(|line| from_utf8(line).ok())
@@ -96,8 +98,10 @@ impl Display for CompilerMessage<'_> {
 // compile
 
 pub fn compile<C, S>(mut callback: C, source: S) -> Result<Ast, ParserError>
-    where C: FnMut(CompilerMessage),
-          S: AsRef<[u8]> {
+where
+    C: FnMut(CompilerMessage),
+    S: AsRef<[u8]>,
+{
     let source = lex(source.as_ref());
     println!("Tokens: {:?}", source.tokens);
     println!("Locations: {:?}", source.locations);

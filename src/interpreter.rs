@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+use std::hash::{Hash, Hasher};
 
 use crate::ast::{NodeRef, RefLen};
 use crate::compiler::ast::{Ast, BinOp, Expr, Node, Stat, UnOp};
@@ -8,6 +9,34 @@ use crate::static_assert_size;
 pub enum Value {
     Integer(i64),
     Float(f64),
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Integer(a), Value::Integer(b)) => a == b,
+            (Value::Integer(a), Value::Float(b)) => &(*a as f64) == b,
+            (Value::Float(a), Value::Integer(b)) => a == &(*b as f64),
+            (Value::Float(a), Value::Float(b)) => a == b,
+        }
+    }
+}
+
+impl Eq for Value {}
+
+impl Hash for Value {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Value::Integer(v) => {
+                state.write_u8(1);
+                v.hash(state);
+            }
+            Value::Float(v) => {
+                state.write_u8(2);
+                v.to_bits().hash(state);
+            }
+        }
+    }
 }
 
 static_assert_size!(Value, 16);
@@ -95,7 +124,12 @@ pub fn interpret(ast: Ast) -> Value {
         state[index.into()]
     }
 
-    fn get_last_ref(cursor: &mut usize, refs: &[NodeRef], state: &mut [Value], len: RefLen) -> Value {
+    fn get_last_ref(
+        cursor: &mut usize,
+        refs: &[NodeRef],
+        state: &mut [Value],
+        len: RefLen,
+    ) -> Value {
         let len: usize = len.into();
         *cursor += len;
         let index = refs[cursor.saturating_sub(1)];
@@ -108,9 +142,7 @@ pub fn interpret(ast: Ast) -> Value {
             Node::Stat(Stat::Compound(len)) => {
                 get_last_ref(&mut ref_cursor, refs, &mut state, *len)
             }
-            Node::Stat(Stat::Expr(expression)) => {
-                get(&mut state, *expression)
-            }
+            Node::Stat(Stat::Expr(expression)) => get(&mut state, *expression),
 
             // expression
             Node::Expr(Expr::Integer(v)) => Value::Integer(*v),

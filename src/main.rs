@@ -1,6 +1,7 @@
 use std::fs::read_to_string;
 
-use petal2::{compile, CompilerMessage, interpret};
+use petal2::code_gen::code_gen;
+use petal2::{compile, CompilerMessage};
 
 fn callback(message: CompilerMessage) {
     println!("{}", message);
@@ -23,6 +24,19 @@ fn main() {
 
     println!("{}", ast);
 
-    let result = interpret(ast);
-    println!("Result: {}", result);
+    let code_gen_result = code_gen(ast);
+
+    let _prototype = match code_gen_result {
+        Ok(prototype) => {
+            println!("Prototype: {:#?}", prototype);
+            prototype
+        }
+        Err(error) => {
+            println!("Compilation failed: {:?}", error);
+            return;
+        }
+    };
+
+    // let result = interpret(ast);
+    // println!("Result: {}", result);
 }

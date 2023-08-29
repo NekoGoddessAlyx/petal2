@@ -20,6 +20,30 @@ pub enum Instruction {
         register: Register,
         constant: ConstantIndex,
     },
+    Neg {
+        destination: Register,
+        from: Register,
+    },
+    Add {
+        destination: Register,
+        left: Register,
+        right: Register,
+    },
+    Sub {
+        destination: Register,
+        left: Register,
+        right: Register,
+    },
+    Mul {
+        destination: Register,
+        left: Register,
+        right: Register,
+    },
+    Div {
+        destination: Register,
+        left: Register,
+        right: Register,
+    },
 }
 
 static_assert_size!(Instruction, 4);

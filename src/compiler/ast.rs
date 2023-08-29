@@ -112,7 +112,7 @@ pub enum BinOp {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct NodeRef(u32);
+pub struct NodeRef(pub(super) u32);
 
 impl From<NodeRef> for usize {
     fn from(value: NodeRef) -> Self {
@@ -236,9 +236,9 @@ impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
                 State::ExitStat(node) => self.exit_stat(node)?,
                 State::EnterExpr(node) => self.enter_expr(node)?,
                 State::ContinueBinExpr(op) => self.continue_bin_expr(op)?,
-                State::EndBinExpr => self.end_bin_expr()?
+                State::EndBinExpr => self.end_bin_expr()?,
             };
-        };
+        }
 
         Ok(())
     }
