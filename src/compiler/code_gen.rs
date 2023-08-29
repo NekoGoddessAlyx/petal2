@@ -220,7 +220,7 @@ impl<'ast, 'prototype> CodeGen<'ast, 'prototype> {
             .ok_or(CodeGenError::NoRegistersAvailable)?;
         let constant = self.push_constant(Value::Integer(0))?;
         self.push_instruction(Instruction::LoadConstant {
-            register: register.into(),
+            destination: register.into(),
             constant,
         });
         self.push_instruction(Instruction::Return {
@@ -286,7 +286,7 @@ impl<'ast, 'prototype> CodeGen<'ast, 'prototype> {
                     .ok_or(CodeGenError::NoRegistersAvailable)?;
                 let constant = self.push_constant(Value::Integer(v))?;
                 self.push_instruction(Instruction::LoadConstant {
-                    register: register.into(),
+                    destination: register.into(),
                     constant,
                 });
                 self.push_state(State::ExitExpr(register));
@@ -299,7 +299,7 @@ impl<'ast, 'prototype> CodeGen<'ast, 'prototype> {
                     .ok_or(CodeGenError::NoRegistersAvailable)?;
                 let constant = self.push_constant(Value::Float(v))?;
                 self.push_instruction(Instruction::LoadConstant {
-                    register: register.into(),
+                    destination: register.into(),
                     constant,
                 });
                 self.push_state(State::ExitExpr(register));
@@ -330,7 +330,7 @@ impl<'ast, 'prototype> CodeGen<'ast, 'prototype> {
         let instruction = match op {
             UnOp::Neg => Instruction::Neg {
                 destination: destination.into(),
-                from: from.into(),
+                right: from.into(),
             },
         };
         self.push_instruction(instruction);

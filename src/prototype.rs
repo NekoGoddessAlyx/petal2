@@ -18,12 +18,12 @@ pub enum Instruction {
         register: Register,
     },
     LoadConstant {
-        register: Register,
+        destination: Register,
         constant: ConstantIndex,
     },
     Neg {
         destination: Register,
-        from: Register,
+        right: Register,
     },
     Add {
         destination: Register,
