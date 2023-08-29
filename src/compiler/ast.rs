@@ -4,34 +4,43 @@ use std::ops::Index;
 use crate::pretty_formatter::PrettyFormatter;
 
 #[derive(Debug)]
-pub struct Ast(Vec<Node>);
+pub struct Ast {
+    nodes: Vec<Node>,
+    refs: Vec<NodeRef>,
+}
 
 impl Ast {
     pub(super) fn new(capacity: usize) -> Self {
-        Self(Vec::with_capacity(capacity))
+        Self {
+            nodes: Vec::with_capacity(capacity),
+            refs: Vec::with_capacity(capacity / 2),
+        }
+    }
+
+    pub fn nodes(&self) -> &[Node] {
+        &self.nodes
+    }
+
+    pub fn refs(&self) -> &[NodeRef] {
+        &self.refs
     }
 
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.nodes.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.nodes.is_empty()
     }
 
-    pub(super) fn push<N: Into<Node>>(&mut self, node: N) -> NodeRef {
-        let index = self.0.len();
-        self.0.push(node.into());
+    pub(super) fn push_node<N: Into<Node>>(&mut self, node: N) -> NodeRef {
+        let index = self.nodes.len();
+        self.nodes.push(node.into());
         NodeRef(index as u32)
     }
-}
 
-impl IntoIterator for Ast {
-    type Item = Node;
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
+    pub(super) fn push_ref(&mut self, node_ref: NodeRef) {
+        self.refs.push(node_ref);
     }
 }
 
@@ -39,7 +48,7 @@ impl Index<NodeRef> for Ast {
     type Output = Node;
 
     fn index(&self, index: NodeRef) -> &Self::Output {
-        &self.0[index.0 as usize]
+        &self.nodes[index.0 as usize]
     }
 }
 
@@ -77,6 +86,7 @@ impl From<Expr> for Node {
 
 #[derive(Debug)]
 pub enum Stat {
+    Compound(RefLen),
     Expr(NodeRef),
 }
 
@@ -110,11 +120,22 @@ impl From<NodeRef> for usize {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct RefLen(pub(super) u32);
+
+impl From<RefLen> for usize {
+    fn from(value: RefLen) -> Self {
+        value.0 as usize
+    }
+}
+
 // display
 
 struct AstPrettyPrinter<'formatter, 'ast> {
     f: PrettyFormatter<'formatter>,
     nodes: &'ast [Node],
+    refs: &'ast [NodeRef],
+    ref_cursor: usize,
     state: Vec<State<'ast>>,
 }
 
@@ -127,7 +148,7 @@ impl Write for AstPrettyPrinter<'_, '_> {
 #[derive(Debug)]
 enum State<'ast> {
     EnterStat(&'ast Stat),
-    // ExitStat(&'ast Stat),
+    ExitStat(&'ast Stat),
     EnterExpr(&'ast Expr),
     ContinueBinExpr(BinOp),
     EndBinExpr,
@@ -152,20 +173,22 @@ impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
 
         Self {
             f: PrettyFormatter::new(f),
-            nodes: &ast.0,
+            nodes: &ast.nodes,
+            refs: &ast.refs,
+            ref_cursor: ast.refs().len(),
             state: Vec::with_capacity(32),
         }
     }
 
-    // #[inline]
-    // fn indent(&mut self) {
-    //     self.f.indent();
-    // }
-    //
-    // #[inline]
-    // fn unindent(&mut self) {
-    //     self.f.unindent();
-    // }
+    #[inline]
+    fn indent(&mut self) {
+        self.f.indent();
+    }
+
+    #[inline]
+    fn unindent(&mut self) {
+        self.f.unindent();
+    }
 
     fn get_node(&self, index: NodeRef) -> &'ast Node {
         &self.nodes[index.0 as usize]
@@ -185,6 +208,13 @@ impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
         }
     }
 
+    fn get_refs(&mut self, len: RefLen) -> &'ast [NodeRef] {
+        let end_index = self.ref_cursor;
+        let start_index = end_index - len.0 as usize;
+        self.ref_cursor = start_index;
+        &self.refs[start_index..end_index]
+    }
+
     fn push_state(&mut self, state: State<'ast>) {
         self.state.push(state);
     }
@@ -197,12 +227,13 @@ impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
         let root_ref = NodeRef(self.nodes.len().saturating_sub(1) as u32);
         let root = self.get_statement(root_ref)?;
 
+        self.push_state(State::ExitStat(root));
         self.push_state(State::EnterStat(root));
 
         while let Some(state) = self.pop_state() {
             match state {
                 State::EnterStat(node) => self.enter_stat(node)?,
-                // State::ExitStat(node) => self.exit_stat(node)?,
+                State::ExitStat(node) => self.exit_stat(node)?,
                 State::EnterExpr(node) => self.enter_expr(node)?,
                 State::ContinueBinExpr(op) => self.continue_bin_expr(op)?,
                 State::EndBinExpr => self.end_bin_expr()?
@@ -214,6 +245,17 @@ impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
 
     fn enter_stat(&mut self, node: &Stat) -> Result<()> {
         match node {
+            Stat::Compound(len) => {
+                writeln!(self, "{{")?;
+                self.indent();
+                let statements = self.get_refs(*len).iter().rev();
+                for statement in statements {
+                    let statement = self.get_statement(*statement)?;
+                    self.push_state(State::ExitStat(statement));
+                    self.push_state(State::EnterStat(statement));
+                }
+                Ok(())
+            }
             Stat::Expr(expr) => {
                 let expr = self.get_expression(*expr)?;
                 self.push_state(State::EnterExpr(expr));
@@ -222,10 +264,19 @@ impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
         }
     }
 
-    // fn exit_stat(&mut self, _node: &Stat) -> Result<()> {
-    //     writeln!(self)?;
-    //     Ok(())
-    // }
+    fn exit_stat(&mut self, node: &Stat) -> Result<()> {
+        match node {
+            Stat::Compound(_) => {
+                self.unindent();
+                writeln!(self, "}}")?;
+                Ok(())
+            }
+            Stat::Expr(_) => {
+                writeln!(self)?;
+                Ok(())
+            }
+        }
+    }
 
     fn enter_expr(&mut self, node: &Expr) -> Result<()> {
         match *node {

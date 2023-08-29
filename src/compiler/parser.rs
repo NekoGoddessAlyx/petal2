@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use crate::ast::RefLen;
 use crate::compiler::ast::{Ast, BinOp, Expr, NodeRef, Stat, UnOp};
 use crate::compiler::callback::ParserCallback;
 use crate::compiler::lexer::{Span, Token};
@@ -26,6 +27,7 @@ pub fn parse<C: ParserCallback>(callback: C, tokens: &[Token], locations: &[Span
     let mut parser = Parser {
         callback,
         had_error: false,
+        panic_mode: false,
         tokens,
         locations,
         cursor: 0,
@@ -33,7 +35,7 @@ pub fn parse<C: ParserCallback>(callback: C, tokens: &[Token], locations: &[Span
         ast: Ast::new(len),
     };
 
-    parser.push_state(State::BeginStatement);
+    parser.push_state(State::BeginCompoundStatement);
     parser.parse()
 }
 
@@ -42,6 +44,10 @@ enum State {
     // statements
     BeginStatement,
     EndStatement(NodeRef),
+
+    BeginCompoundStatement,
+    ContinueCompoundStatement(RefLen),
+    EndCompoundStatement(RefLen),
 
     BeginExpressionStatement,
     EndExpressionStatement,
@@ -69,8 +75,8 @@ impl State {
         match *self {
             // statements
             State::BeginStatement => match from {
-                // only valid while statement is the root
-                None => {
+                Some(State::BeginCompoundStatement) |
+                Some(State::ContinueCompoundStatement(..)) => {
                     parser.begin_statement();
                     Ok(())
                 }
@@ -81,6 +87,28 @@ impl State {
                 _ => fail_transfer!(),
             }
 
+            State::BeginCompoundStatement => match from {
+                // only valid while compound statement is the root
+                None => {
+                    parser.begin_compound_statement();
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            }
+            State::ContinueCompoundStatement(len) => match from {
+                Some(State::EndStatement(statement)) => {
+                    parser.continue_compound_statement(len, statement);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            }
+            State::EndCompoundStatement(len) => match from {
+                Some(State::ContinueCompoundStatement(..)) => {
+                    parser.end_compound_statement(len);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            }
             State::BeginExpressionStatement => match from {
                 Some(State::BeginStatement) => {
                     parser.begin_expression_statement();
@@ -141,6 +169,7 @@ impl State {
 struct Parser<'tokens, C> {
     callback: C,
     had_error: bool,
+    panic_mode: bool,
     tokens: &'tokens [Token],
     locations: &'tokens [Span],
     cursor: usize,
@@ -151,7 +180,10 @@ struct Parser<'tokens, C> {
 impl<C: ParserCallback> Parser<'_, C> {
     fn on_error(&mut self, message: &dyn Display, source: Option<Span>) {
         self.had_error = true;
-        (self.callback)(message, source);
+        if !self.panic_mode {
+            self.panic_mode = true;
+            (self.callback)(message, source);
+        }
     }
 
     fn peek(&mut self) -> Token {
@@ -236,13 +268,50 @@ impl<C: ParserCallback> Parser<'_, C> {
         }
     }
 
+    fn begin_compound_statement(&mut self) {
+        self.push_state(State::ContinueCompoundStatement(RefLen(0)));
+        self.push_state(State::BeginStatement);
+    }
+
+    fn continue_compound_statement(&mut self, len: RefLen, statement: NodeRef) {
+        self.ast.push_ref(statement);
+
+        // panic recovery
+        if self.panic_mode {
+            self.panic_mode = false;
+
+            loop {
+                if is_statement(self.peek()) {
+                    break;
+                }
+
+                self.advance();
+            }
+        }
+
+        self.skip_nl();
+        match self.peek() {
+            Token::Eof => {
+                self.push_state(State::EndCompoundStatement(RefLen(len.0 + 1)));
+            }
+            _ => {
+                self.push_state(State::ContinueCompoundStatement(RefLen(len.0 + 1)));
+                self.push_state(State::BeginStatement);
+            }
+        }
+    }
+
+    fn end_compound_statement(&mut self, len: RefLen) {
+        let _statement = self.ast.push_node(Stat::Compound(len));
+    }
+
     fn begin_expression_statement(&mut self) {
         self.push_state(State::EndExpressionStatement);
         self.push_state(State::BeginExpression(Precedence::root()));
     }
 
     fn end_expression_statement(&mut self, expression: NodeRef) {
-        let statement = self.ast.push(Stat::Expr(expression));
+        let statement = self.ast.push_node(Stat::Expr(expression));
         self.push_state(State::EndStatement(statement));
         self.end_of_statement();
     }
@@ -259,19 +328,19 @@ impl<C: ParserCallback> Parser<'_, C> {
             }
             Token::Integer(v) => {
                 self.advance();
-                let left = self.ast.push(Expr::Integer(v));
+                let left = self.ast.push_node(Expr::Integer(v));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
             Token::Float(v) => {
                 self.advance();
-                let left = self.ast.push(Expr::Float(v));
+                let left = self.ast.push_node(Expr::Float(v));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
             _ => {
                 self.on_error(&"Expected expression", self.peek_location());
 
                 // keep the state consistent
-                let left = self.ast.push(Expr::Integer(0));
+                let left = self.ast.push_node(Expr::Integer(0));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
         }
@@ -315,12 +384,12 @@ impl<C: ParserCallback> Parser<'_, C> {
     }
 
     fn end_prefix_expression(&mut self, precedence: Precedence, op: UnOp, right: NodeRef) {
-        let left = self.ast.push(Expr::UnOp(op, right));
+        let left = self.ast.push_node(Expr::UnOp(op, right));
         self.push_state(State::BeginExpressionInfix(precedence, left));
     }
 
     fn end_binary_expression(&mut self, precedence: Precedence, op: BinOp, left: NodeRef, right: NodeRef) {
-        let left = self.ast.push(Expr::BinOp(op, left, right));
+        let left = self.ast.push_node(Expr::BinOp(op, left, right));
         self.push_state(State::BeginExpressionInfix(precedence, left));
     }
 }
@@ -360,5 +429,20 @@ fn get_precedence(token: Token) -> Precedence {
         Token::Nl |
         Token::Eof |
         Token::Err(_) => Precedence::None,
+    }
+}
+
+fn is_statement(token: Token) -> bool {
+    match token {
+        token if is_expression(token) => true,
+        _ => false,
+    }
+}
+
+fn is_expression(token: Token) -> bool {
+    match token {
+        Token::Integer(_) |
+        Token::Float(_) => true,
+        _ => false,
     }
 }
