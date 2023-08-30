@@ -141,16 +141,12 @@ mod string {
     #[repr(transparent)]
     pub struct StringRef(pub u32);
 
-    pub struct Strings<I, S> {
+    pub struct Strings<I: StringInterner> {
         interner: I,
-        strings: Vec<S>,
+        strings: Vec<I::String>,
     }
 
-    impl<I, S> Strings<I, S>
-    where
-        I: StringInterner<String = S>,
-        S: AsRef<[u8]> + Clone,
-    {
+    impl<I: StringInterner> Strings<I> {
         pub fn new(interner: I) -> Self {
             Self {
                 interner,
@@ -158,7 +154,7 @@ mod string {
             }
         }
 
-        pub fn new_string(&mut self, string: &[u8]) -> S {
+        pub fn new_string(&mut self, string: &[u8]) -> I::String {
             self.interner.intern(string)
         }
 
@@ -169,7 +165,7 @@ mod string {
             StringRef(index as u32)
         }
 
-        pub fn get_string(&mut self, index: StringRef) -> S {
+        pub fn get_string(&mut self, index: StringRef) -> I::String {
             self.strings[index.0 as usize].clone()
         }
     }

@@ -18,10 +18,10 @@ pub enum CodeGenError {
 
 pub type Result<T> = std::result::Result<T, CodeGenError>;
 
-pub fn code_gen<I>(ast: Ast, strings: &mut Strings<I, PString>) -> Result<Prototype>
-where
-    I: StringInterner<String = PString>,
-{
+pub fn code_gen<I: StringInterner<String = PString>>(
+    ast: Ast,
+    strings: &mut Strings<I>,
+) -> Result<Prototype> {
     let name = strings.new_string(b"test");
     let mut prototype_builder = PrototypeBuilder {
         name,
@@ -94,10 +94,11 @@ enum State<'ast> {
 }
 
 impl<'ast> State<'ast> {
-    fn enter<I>(&mut self, from: Option<State>, code_gen: &mut CodeGen<'ast, '_, I>) -> Result<()>
-    where
-        I: StringInterner<String = PString>,
-    {
+    fn enter<I: StringInterner<String = PString>>(
+        &mut self,
+        from: Option<State>,
+        code_gen: &mut CodeGen<'ast, '_, I>,
+    ) -> Result<()> {
         macro_rules! fail_transfer {
             () => {{
                 dbg!(&from);
@@ -158,12 +159,12 @@ impl<'ast> State<'ast> {
     }
 }
 
-struct CodeGen<'ast, 'prototype, I> {
+struct CodeGen<'ast, 'prototype, I: StringInterner<String = PString>> {
     nodes: &'ast [Node],
     refs: &'ast [NodeRef],
     ref_cursor: usize,
 
-    strings: &'ast mut Strings<I, PString>,
+    strings: &'ast mut Strings<I>,
 
     state: Vec<State<'ast>>,
 
@@ -173,10 +174,7 @@ struct CodeGen<'ast, 'prototype, I> {
     constants: &'prototype mut Vec<Value>,
 }
 
-impl<'ast, 'prototype, I> CodeGen<'ast, 'prototype, I>
-where
-    I: StringInterner<String = PString>,
-{
+impl<'ast, 'prototype, I: StringInterner<String = PString>> CodeGen<'ast, 'prototype, I> {
     fn get_node(&self, index: NodeRef) -> &'ast Node {
         &self.nodes[index.0 as usize]
     }
