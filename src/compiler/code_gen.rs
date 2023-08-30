@@ -28,9 +28,9 @@ pub fn code_gen(ast: Ast) -> Result<Prototype> {
     };
 
     let mut code_gen = CodeGen {
-        nodes: ast.nodes(),
-        refs: ast.refs(),
-        ref_cursor: ast.refs().len(),
+        nodes: &ast.nodes,
+        refs: &ast.refs,
+        ref_cursor: ast.refs.len(),
 
         state: Vec::with_capacity(32),
 
@@ -40,7 +40,13 @@ pub fn code_gen(ast: Ast) -> Result<Prototype> {
         constants: &mut prototype_builder.constants,
     };
 
+    let root_ref = ast.root();
+    let root = code_gen.get_statement(root_ref)?;
+    code_gen.push_state(State::ExitStat);
+    code_gen.push_state(State::EnterStat(root));
+
     code_gen.visit()?;
+    code_gen.finish()?;
 
     Ok(prototype_builder.build())
 }
@@ -158,8 +164,7 @@ struct CodeGen<'ast, 'prototype> {
 
 impl<'ast, 'prototype> CodeGen<'ast, 'prototype> {
     fn get_node(&self, index: NodeRef) -> &'ast Node {
-        let index: usize = index.into();
-        &self.nodes[index]
+        &self.nodes[index.0 as usize]
     }
 
     fn get_statement(&self, index: NodeRef) -> Result<&'ast Stat> {
@@ -232,19 +237,13 @@ impl<'ast, 'prototype> CodeGen<'ast, 'prototype> {
     // visit
 
     fn visit(&mut self) -> Result<()> {
-        let root_ref = NodeRef(self.nodes.len().saturating_sub(1) as u32);
-        let root = self.get_statement(root_ref)?;
-
-        self.push_state(State::ExitStat);
-        self.push_state(State::EnterStat(root));
-
         let mut previous = None;
         while let Some(mut state) = self.pop_state() {
             state.enter(previous, self)?;
             previous = Some(state);
         }
 
-        self.finish()
+        Ok(())
     }
 
     // statements

@@ -1,54 +1,33 @@
 use std::fmt::{Display, Error, Formatter, Write};
-use std::ops::Index;
 
 use crate::pretty_formatter::PrettyFormatter;
 
 #[derive(Debug)]
 pub struct Ast {
-    nodes: Vec<Node>,
-    refs: Vec<NodeRef>,
+    pub nodes: Vec<Node>,
+    pub refs: Vec<NodeRef>,
 }
 
 impl Ast {
-    pub(super) fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
             nodes: Vec::with_capacity(capacity),
             refs: Vec::with_capacity(capacity / 2),
         }
     }
 
-    pub fn nodes(&self) -> &[Node] {
-        &self.nodes
-    }
-
-    pub fn refs(&self) -> &[NodeRef] {
-        &self.refs
-    }
-
-    pub fn len(&self) -> usize {
-        self.nodes.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.nodes.is_empty()
-    }
-
-    pub(super) fn push_node<N: Into<Node>>(&mut self, node: N) -> NodeRef {
+    pub fn push_node<N: Into<Node>>(&mut self, node: N) -> NodeRef {
         let index = self.nodes.len();
         self.nodes.push(node.into());
         NodeRef(index as u32)
     }
 
-    pub(super) fn push_ref(&mut self, node_ref: NodeRef) {
+    pub fn push_ref(&mut self, node_ref: NodeRef) {
         self.refs.push(node_ref);
     }
-}
 
-impl Index<NodeRef> for Ast {
-    type Output = Node;
-
-    fn index(&self, index: NodeRef) -> &Self::Output {
-        &self.nodes[index.0 as usize]
+    pub fn root(&self) -> NodeRef {
+        NodeRef(self.nodes.len().saturating_sub(1) as u32)
     }
 }
 
@@ -112,22 +91,10 @@ pub enum BinOp {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct NodeRef(pub(super) u32);
-
-impl From<NodeRef> for usize {
-    fn from(value: NodeRef) -> Self {
-        value.0 as usize
-    }
-}
+pub struct NodeRef(pub u32);
 
 #[derive(Copy, Clone, Debug)]
-pub struct RefLen(pub(super) u32);
-
-impl From<RefLen> for usize {
-    fn from(value: RefLen) -> Self {
-        value.0 as usize
-    }
-}
+pub struct RefLen(pub u32);
 
 // display
 
@@ -169,13 +136,13 @@ impl From<Error> for PrinterErr {
 
 impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
     fn new(ast: &'ast Ast, f: &'formatter mut Formatter<'_>) -> Self {
-        assert!(!ast.is_empty(), "Ast is empty");
+        assert!(!ast.nodes.is_empty(), "Ast is empty");
 
         Self {
             f: PrettyFormatter::new(f),
             nodes: &ast.nodes,
             refs: &ast.refs,
-            ref_cursor: ast.refs().len(),
+            ref_cursor: ast.refs.len(),
             state: Vec::with_capacity(32),
         }
     }
