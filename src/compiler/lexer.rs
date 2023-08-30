@@ -54,9 +54,7 @@ pub struct LineNumber(NonZeroU32);
 
 impl LineNumber {
     fn new(value: u32) -> Self {
-        assert_ne!(value, 0, "Line numbers are 1-indexed");
-        // SAFETY: already checked
-        Self(unsafe { NonZeroU32::new_unchecked(value) })
+        Self(NonZeroU32::new(value).expect("Line numbers are 1-indexed"))
     }
     #[inline]
     fn get(self) -> u32 {
@@ -94,7 +92,8 @@ impl<'source> Source<'source> {
         let line_number: usize = line_number.into();
         let index = line_number.saturating_sub(1);
         let start = self.line_starts.get(index).copied()?;
-        let end = self.line_starts
+        let end = self
+            .line_starts
             .get(index + 1)
             .copied()
             .unwrap_or(self.bytes.len() as u32);
@@ -144,8 +143,16 @@ pub fn lex(source: &[u8]) -> Source {
     assert!(!tokens.is_empty(), "Tokens is empty");
     assert!(!locations.is_empty(), "Locations is empty");
     assert!(!line_starts.is_empty(), "Line starts is empty");
-    assert_eq!(tokens.len(), locations.len(), "Mismatch between tokens and locations");
-    assert_eq!(line_starts.len(), lexer.line_number as usize, "Mismatch between line sources and line number");
+    assert_eq!(
+        tokens.len(),
+        locations.len(),
+        "Mismatch between tokens and locations"
+    );
+    assert_eq!(
+        line_starts.len(),
+        lexer.line_number as usize,
+        "Mismatch between line sources and line number"
+    );
     Source {
         bytes: source,
         tokens,
@@ -175,7 +182,10 @@ impl Lexer<'_> {
     }
 
     fn advance(&mut self, n: usize) {
-        assert!(self.cursor.end as usize + n <= self.source.len(), "Cannot advance past end of source");
+        assert!(
+            self.cursor.end as usize + n <= self.source.len(),
+            "Cannot advance past end of source"
+        );
         self.cursor.end += n as u32;
         self.line_cursor.end += n as u32;
     }
