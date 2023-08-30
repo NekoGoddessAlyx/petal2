@@ -4,7 +4,9 @@ use std::str::from_utf8;
 use crate::compiler::code_gen::code_gen;
 use crate::compiler::lexer::{lex, Source, Span};
 use crate::compiler::parser::parse;
+use crate::compiler::string::Strings;
 use crate::prototype::Prototype;
+use crate::PStringInterner;
 
 mod ast;
 mod code_gen;
@@ -105,6 +107,7 @@ where
     C: FnMut(CompilerMessage),
     S: AsRef<[u8]>,
 {
+    let mut strings = Strings::new(PStringInterner::default());
     let source = lex(source.as_ref());
     println!("Tokens: {:?}", source.tokens);
     println!("Locations: {:?}", source.locations);
@@ -126,9 +129,49 @@ where
     };
     println!("Ast: {:?}", ast);
 
-    match code_gen(ast) {
+    match code_gen(ast, &mut strings) {
         Ok(prototype) => Ok(prototype),
         Err(_error) => Err(()),
+    }
+}
+
+mod string {
+    use crate::StringInterner;
+
+    #[repr(transparent)]
+    pub struct StringRef(pub u32);
+
+    pub struct Strings<I, S> {
+        interner: I,
+        strings: Vec<S>,
+    }
+
+    impl<I, S> Strings<I, S>
+    where
+        I: StringInterner<String = S>,
+        S: AsRef<[u8]> + Clone,
+    {
+        pub fn new(interner: I) -> Self {
+            Self {
+                interner,
+                strings: Vec::with_capacity(32),
+            }
+        }
+
+        pub fn new_string(&mut self, string: &[u8]) -> S {
+            self.interner.intern(string)
+        }
+
+        pub fn push_string(&mut self, string: &[u8]) -> StringRef {
+            let string = self.new_string(string);
+            let index = self.strings.len();
+            self.strings.push(string);
+            StringRef(index as u32)
+        }
+
+        pub fn get_string(&mut self, index: StringRef) -> S {
+            self.strings[index.0 as usize].clone()
+        }
     }
 }
 

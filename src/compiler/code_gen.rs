@@ -3,9 +3,10 @@ use std::collections::HashMap;
 
 use crate::compiler::ast::{Ast, BinOp, Expr, Node, NodeRef, RefLen, Stat, UnOp};
 use crate::compiler::registers::{Register, Registers};
+use crate::compiler::string::Strings;
 use crate::prototype::{ConstantIndex, Instruction, Prototype};
 use crate::value::Value;
-use crate::PString;
+use crate::{PString, StringInterner};
 
 #[derive(Debug)]
 pub enum CodeGenError {
@@ -17,8 +18,11 @@ pub enum CodeGenError {
 
 pub type Result<T> = std::result::Result<T, CodeGenError>;
 
-pub fn code_gen(ast: Ast) -> Result<Prototype> {
-    let name = "test".to_owned().into_boxed_str().into();
+pub fn code_gen<I>(ast: Ast, strings: &mut Strings<I, PString>) -> Result<Prototype>
+where
+    I: StringInterner<String = PString>,
+{
+    let name = strings.new_string(b"test");
     let mut prototype_builder = PrototypeBuilder {
         name,
         registers: Registers::new(),
@@ -31,6 +35,8 @@ pub fn code_gen(ast: Ast) -> Result<Prototype> {
         nodes: &ast.nodes,
         refs: &ast.refs,
         ref_cursor: ast.refs.len(),
+
+        strings,
 
         state: Vec::with_capacity(32),
 
@@ -88,7 +94,10 @@ enum State<'ast> {
 }
 
 impl<'ast> State<'ast> {
-    fn enter(&mut self, from: Option<State>, code_gen: &mut CodeGen<'ast, '_>) -> Result<()> {
+    fn enter<I>(&mut self, from: Option<State>, code_gen: &mut CodeGen<'ast, '_, I>) -> Result<()>
+    where
+        I: StringInterner<String = PString>,
+    {
         macro_rules! fail_transfer {
             () => {{
                 dbg!(&from);
@@ -149,10 +158,12 @@ impl<'ast> State<'ast> {
     }
 }
 
-struct CodeGen<'ast, 'prototype> {
+struct CodeGen<'ast, 'prototype, I> {
     nodes: &'ast [Node],
     refs: &'ast [NodeRef],
     ref_cursor: usize,
+
+    strings: &'ast mut Strings<I, PString>,
 
     state: Vec<State<'ast>>,
 
@@ -162,7 +173,10 @@ struct CodeGen<'ast, 'prototype> {
     constants: &'prototype mut Vec<Value>,
 }
 
-impl<'ast, 'prototype> CodeGen<'ast, 'prototype> {
+impl<'ast, 'prototype, I> CodeGen<'ast, 'prototype, I>
+where
+    I: StringInterner<String = PString>,
+{
     fn get_node(&self, index: NodeRef) -> &'ast Node {
         &self.nodes[index.0 as usize]
     }

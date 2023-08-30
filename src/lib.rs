@@ -1,9 +1,6 @@
-use std::rc::Rc;
-
 pub use compiler::*;
 pub use interpreter::*;
-
-pub type PString = Rc<str>;
+pub use string::*;
 
 macro_rules! static_assert_size {
     ($ty: ty, $size: expr) => {
@@ -17,4 +14,5 @@ mod compiler;
 mod interpreter;
 mod pretty_formatter;
 mod prototype;
+mod string;
 mod value;
