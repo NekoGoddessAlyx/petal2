@@ -5,6 +5,7 @@ pub enum InterpretResult {}
 
 pub fn interpret(function: Prototype) -> Result<Value, InterpretResult> {
     let instructions = function.instructions.as_ref();
+    #[allow(unused)]
     let constants = function.constants.as_ref();
 
     // Ensure instructions is not empty and ends with a return
