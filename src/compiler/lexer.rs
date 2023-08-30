@@ -3,7 +3,8 @@ use std::num::NonZeroU32;
 use std::ops::RangeInclusive;
 use std::str::{from_utf8, FromStr};
 
-use crate::static_assert_size;
+use crate::compiler::string::{StringRef, Strings};
+use crate::{static_assert_size, StringInterner};
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum LexerErr {
@@ -27,6 +28,8 @@ impl Display for LexerErr {
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum Token {
+    Var,
+
     Add,
     Sub,
     Mul,
@@ -34,6 +37,8 @@ pub enum Token {
 
     Integer(i64),
     Float(f64),
+
+    Identifier(StringRef),
 
     Nl,
     Eof,
@@ -116,9 +121,13 @@ impl<'source> Source<'source> {
     }
 }
 
-pub fn lex(source: &[u8]) -> Source {
+pub fn lex<'source, I: StringInterner>(
+    source: &'source [u8],
+    strings: &'source mut Strings<I>,
+) -> Source<'source> {
     let mut lexer = Lexer {
         source,
+        strings,
         buffer: Vec::with_capacity(16),
         cursor: Span { start: 0, end: 0 },
         line_cursor: Span { start: 0, end: 0 },
@@ -161,8 +170,9 @@ pub fn lex(source: &[u8]) -> Source {
     }
 }
 
-struct Lexer<'source> {
+struct Lexer<'source, I: StringInterner> {
     source: &'source [u8],
+    strings: &'source mut Strings<I>,
     buffer: Vec<u8>,
     cursor: Span,
     line_cursor: Span,
@@ -172,7 +182,7 @@ struct Lexer<'source> {
     line_starts: Vec<u32>,
 }
 
-impl Lexer<'_> {
+impl<I: StringInterner> Lexer<'_, I> {
     fn on_error(&mut self, err: LexerErr) {
         self.push_token(Token::Err(err));
     }
@@ -257,6 +267,7 @@ impl Lexer<'_> {
                 self.push_token(Token::Div);
             }
             Some(c) if c.is_ascii_digit() => self.read_number(),
+            Some(c) if c.is_ascii_alphabetic() => self.read_identifier(),
             Some(c) => {
                 self.advance(1);
                 self.on_error(LexerErr::UnexpectedCharacter(c));
@@ -303,6 +314,34 @@ impl Lexer<'_> {
             None => {
                 self.on_error(LexerErr::FailedNumberParse);
                 self.push_token(Token::Float(f64::NAN));
+            }
+        }
+    }
+
+    fn read_identifier(&mut self) {
+        assert!(self
+            .peek(0)
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == b'_'));
+
+        self.buffer.clear();
+
+        while let Some(c) = self.peek(0) {
+            if c.is_ascii_alphanumeric() || c == b'_' {
+                self.buffer.push(c);
+                self.advance(1);
+            } else {
+                break;
+            }
+        }
+
+        let string = self.buffer.as_slice();
+        match string {
+            b"var" => {
+                self.push_token(Token::Var);
+            }
+            _ => {
+                let string_ref = self.strings.push_string(string);
+                self.push_token(Token::Identifier(string_ref));
             }
         }
     }

@@ -434,9 +434,13 @@ fn get_precedence(token: Token) -> Precedence {
     match token {
         Token::Add | Token::Sub => Precedence::Additive,
         Token::Mul | Token::Div => Precedence::Multiplicative,
-        Token::Integer(_) | Token::Float(_) | Token::Nl | Token::Eof | Token::Err(_) => {
-            Precedence::None
-        }
+        Token::Var
+        | Token::Integer(_)
+        | Token::Float(_)
+        | Token::Identifier(_)
+        | Token::Nl
+        | Token::Eof
+        | Token::Err(_) => Precedence::None,
     }
 }
 

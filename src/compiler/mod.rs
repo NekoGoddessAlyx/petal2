@@ -108,7 +108,8 @@ where
     S: AsRef<[u8]>,
 {
     let mut strings = Strings::new(PStringInterner::default());
-    let source = lex(source.as_ref());
+
+    let source = lex(source.as_ref(), &mut strings);
     println!("Tokens: {:?}", source.tokens);
     println!("Locations: {:?}", source.locations);
     println!("Line Starts: {:?}", source.line_starts);
@@ -138,6 +139,11 @@ where
 mod string {
     use crate::StringInterner;
 
+    // Could probably use the string directly instead of this abstraction
+    // Would make this ref AND the strings type unnecessary
+    // The concern right meow is the size of the PString type
+    // Don't want to make Token any bigger
+    #[derive(Copy, Clone, PartialEq, Debug)]
     #[repr(transparent)]
     pub struct StringRef(pub u32);
 
