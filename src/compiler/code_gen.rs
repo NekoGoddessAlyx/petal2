@@ -1,12 +1,16 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-use crate::compiler::ast::{Ast, BinOp, Expr, Node, NodeRef, RefLen, Stat, UnOp};
+use crate::compiler::ast::{BinOp, Expr, NodeRef, RefLen, UnOp};
 use crate::compiler::registers::{Register, Registers};
 use crate::compiler::string::Strings;
 use crate::prototype::{ConstantIndex, Instruction, Prototype};
 use crate::value::Value;
 use crate::{PString, StringInterner};
+
+type Ast = crate::compiler::ast::Ast<PString>;
+type Node = crate::compiler::ast::Node<PString>;
+type Stat = crate::compiler::ast::Stat<PString>;
 
 #[derive(Debug)]
 pub enum CodeGenError {
@@ -268,6 +272,15 @@ impl<'ast, 'prototype, I: StringInterner<String = PString>> CodeGen<'ast, 'proto
                     let statement = self.get_statement(*statement)?;
                     self.push_state(State::ExitStat);
                     self.push_state(State::EnterStat(statement));
+                }
+                Ok(())
+            }
+            Stat::VarDecl(_name, definition) => {
+                // TODO currently treating it as if it's an optional expression statement
+                if let Some(definition) = definition {
+                    let definition = self.get_expression(*definition)?;
+                    self.push_state(State::ExitExprStat);
+                    self.push_state(State::EnterExpr(definition));
                 }
                 Ok(())
             }

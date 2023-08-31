@@ -3,12 +3,12 @@ use std::fmt::{Display, Error, Formatter, Write};
 use crate::pretty_formatter::PrettyFormatter;
 
 #[derive(Debug)]
-pub struct Ast {
-    pub nodes: Vec<Node>,
+pub struct Ast<S> {
+    pub nodes: Vec<Node<S>>,
     pub refs: Vec<NodeRef>,
 }
 
-impl Ast {
+impl<S> Ast<S> {
     pub fn new(capacity: usize) -> Self {
         Self {
             nodes: Vec::with_capacity(capacity),
@@ -16,7 +16,7 @@ impl Ast {
         }
     }
 
-    pub fn push_node<N: Into<Node>>(&mut self, node: N) -> NodeRef {
+    pub fn push_node<N: Into<Node<S>>>(&mut self, node: N) -> NodeRef {
         let index = self.nodes.len();
         self.nodes.push(node.into());
         NodeRef(index as u32)
@@ -31,7 +31,7 @@ impl Ast {
     }
 }
 
-impl Display for Ast {
+impl<S: Display> Display for Ast<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let pretty_printer = AstPrettyPrinter::new(self, f);
         match pretty_printer.visit() {
@@ -46,26 +46,27 @@ impl Display for Ast {
 }
 
 #[derive(Debug)]
-pub enum Node {
-    Stat(Stat),
+pub enum Node<S> {
+    Stat(Stat<S>),
     Expr(Expr),
 }
 
-impl From<Stat> for Node {
-    fn from(value: Stat) -> Self {
+impl<S> From<Stat<S>> for Node<S> {
+    fn from(value: Stat<S>) -> Self {
         Node::Stat(value)
     }
 }
 
-impl From<Expr> for Node {
+impl<S> From<Expr> for Node<S> {
     fn from(value: Expr) -> Self {
         Node::Expr(value)
     }
 }
 
 #[derive(Debug)]
-pub enum Stat {
+pub enum Stat<S> {
     Compound(RefLen),
+    VarDecl(S, Option<NodeRef>),
     Expr(NodeRef),
 }
 
@@ -98,24 +99,24 @@ pub struct RefLen(pub u32);
 
 // display
 
-struct AstPrettyPrinter<'formatter, 'ast> {
+struct AstPrettyPrinter<'formatter, 'ast, S> {
     f: PrettyFormatter<'formatter>,
-    nodes: &'ast [Node],
+    nodes: &'ast [Node<S>],
     refs: &'ast [NodeRef],
     ref_cursor: usize,
-    state: Vec<State<'ast>>,
+    state: Vec<State<'ast, S>>,
 }
 
-impl Write for AstPrettyPrinter<'_, '_> {
+impl<S> Write for AstPrettyPrinter<'_, '_, S> {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
         self.f.write_str(s)
     }
 }
 
 #[derive(Debug)]
-enum State<'ast> {
-    EnterStat(&'ast Stat),
-    ExitStat(&'ast Stat),
+enum State<'ast, S> {
+    EnterStat(&'ast Stat<S>),
+    ExitStat(&'ast Stat<S>),
     EnterExpr(&'ast Expr),
     ContinueBinExpr(BinOp),
     EndBinExpr,
@@ -134,8 +135,8 @@ impl From<Error> for PrinterErr {
     }
 }
 
-impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
-    fn new(ast: &'ast Ast, f: &'formatter mut Formatter<'_>) -> Self {
+impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
+    fn new(ast: &'ast Ast<S>, f: &'formatter mut Formatter<'_>) -> Self {
         assert!(!ast.nodes.is_empty(), "Ast is empty");
 
         Self {
@@ -157,11 +158,11 @@ impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
         self.f.unindent();
     }
 
-    fn get_node(&self, index: NodeRef) -> &'ast Node {
+    fn get_node(&self, index: NodeRef) -> &'ast Node<S> {
         &self.nodes[index.0 as usize]
     }
 
-    fn get_statement(&self, index: NodeRef) -> Result<&'ast Stat> {
+    fn get_statement(&self, index: NodeRef) -> Result<&'ast Stat<S>> {
         match self.get_node(index) {
             Node::Stat(node) => Ok(node),
             _ => Err(PrinterErr::UnexpectedNode),
@@ -182,11 +183,11 @@ impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
         &self.refs[start_index..end_index]
     }
 
-    fn push_state(&mut self, state: State<'ast>) {
+    fn push_state(&mut self, state: State<'ast, S>) {
         self.state.push(state);
     }
 
-    fn pop_state(&mut self) -> Option<State<'ast>> {
+    fn pop_state(&mut self) -> Option<State<'ast, S>> {
         self.state.pop()
     }
 
@@ -210,7 +211,7 @@ impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
         Ok(())
     }
 
-    fn enter_stat(&mut self, node: &Stat) -> Result<()> {
+    fn enter_stat(&mut self, node: &Stat<S>) -> Result<()> {
         match node {
             Stat::Compound(len) => {
                 writeln!(self, "{{")?;
@@ -223,6 +224,15 @@ impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
                 }
                 Ok(())
             }
+            Stat::VarDecl(name, def) => {
+                write!(self, "var {}", name)?;
+                if let Some(def) = def {
+                    write!(self, " = ")?;
+                    let def = self.get_expression(*def)?;
+                    self.push_state(State::EnterExpr(def));
+                }
+                Ok(())
+            }
             Stat::Expr(expr) => {
                 let expr = self.get_expression(*expr)?;
                 self.push_state(State::EnterExpr(expr));
@@ -231,14 +241,18 @@ impl<'formatter, 'ast> AstPrettyPrinter<'formatter, 'ast> {
         }
     }
 
-    fn exit_stat(&mut self, node: &Stat) -> Result<()> {
+    fn exit_stat(&mut self, node: &Stat<S>) -> Result<()> {
         match node {
-            Stat::Compound(_) => {
+            Stat::Compound(..) => {
                 self.unindent();
                 writeln!(self, "}}")?;
                 Ok(())
             }
-            Stat::Expr(_) => {
+            Stat::VarDecl(..) => {
+                writeln!(self)?;
+                Ok(())
+            }
+            Stat::Expr(..) => {
                 writeln!(self)?;
                 Ok(())
             }

@@ -122,7 +122,12 @@ where
         });
     };
 
-    let ast = match parse(parser_callback, &source.tokens, &source.locations) {
+    let ast = match parse(
+        parser_callback,
+        &source.tokens,
+        &source.locations,
+        &mut strings,
+    ) {
         Ok(ast) => ast,
         Err(_error) => {
             return Err(());

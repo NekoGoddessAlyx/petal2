@@ -30,6 +30,8 @@ impl Display for LexerErr {
 pub enum Token {
     Var,
 
+    Eq,
+
     Add,
     Sub,
     Mul,
@@ -121,9 +123,9 @@ impl<'source> Source<'source> {
     }
 }
 
-pub fn lex<'source, I: StringInterner>(
+pub fn lex<'source, 'strings, I: StringInterner>(
     source: &'source [u8],
-    strings: &'source mut Strings<I>,
+    strings: &'strings mut Strings<I>,
 ) -> Source<'source> {
     let mut lexer = Lexer {
         source,
@@ -250,6 +252,10 @@ impl<I: StringInterner> Lexer<'_, I> {
         self.start_cursor();
 
         match self.peek(0) {
+            Some(b'=') => {
+                self.advance(1);
+                self.push_token(Token::Eq);
+            }
             Some(b'+') => {
                 self.advance(1);
                 self.push_token(Token::Add);

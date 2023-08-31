@@ -275,7 +275,7 @@ impl<C: ParserCallback, I: StringInterner> Parser<'_, C, I> {
 
     // parse
 
-    fn parse(mut self) -> Result<Ast, ParserError> {
+    fn parse(mut self) -> Result<Ast<I::String>, ParserError> {
         let mut previous = None;
 
         while let Some(mut state) = self.pop_state() {
@@ -299,6 +299,10 @@ impl<C: ParserCallback, I: StringInterner> Parser<'_, C, I> {
     fn begin_statement(&mut self) {
         self.skip_nl();
         match self.peek() {
+            Token::Var => {
+                self.advance();
+                self.push_state(State::BeginVariableDeclaration);
+            }
             _ => {
                 self.push_state(State::BeginExpressionStatement);
             }
@@ -340,6 +344,38 @@ impl<C: ParserCallback, I: StringInterner> Parser<'_, C, I> {
 
     fn end_compound_statement(&mut self, len: RefLen) {
         let _statement = self.ast.push_node(Stat::Compound(len));
+    }
+
+    fn begin_variable_declaration(&mut self) {
+        self.skip_nl();
+        let name = match self.peek() {
+            Token::Identifier(index) => {
+                self.advance();
+                index
+            }
+            _ => {
+                self.on_error(&"Expected variable name", self.peek_location());
+                self.strings.push_string(b"")
+            }
+        };
+
+        self.push_state(State::EndVariableDeclaration(name));
+
+        // do not skip NL
+        match self.peek() {
+            Token::Eq => {
+                self.advance();
+                self.push_state(State::BeginExpression(Precedence::root()));
+            }
+            _ => {}
+        }
+    }
+
+    fn end_variable_declaration(&mut self, name: StringRef, init: Option<NodeRef>) {
+        let name = self.strings.get_string(name);
+        let statement = self.ast.push_node(Stat::VarDecl(name, init));
+        self.push_state(State::EndStatement(statement));
+        self.end_of_statement();
     }
 
     fn begin_expression_statement(&mut self) {
@@ -466,6 +502,7 @@ fn get_precedence(token: Token) -> Precedence {
         Token::Add | Token::Sub => Precedence::Additive,
         Token::Mul | Token::Div => Precedence::Multiplicative,
         Token::Var
+        | Token::Eq
         | Token::Integer(_)
         | Token::Float(_)
         | Token::Identifier(_)
@@ -477,6 +514,7 @@ fn get_precedence(token: Token) -> Precedence {
 
 fn is_statement(token: Token) -> bool {
     match token {
+        Token::Var => true,
         token if is_expression(token) => true,
         _ => false,
     }
