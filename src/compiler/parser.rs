@@ -393,20 +393,26 @@ impl<C: ParserCallback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S>
 
     fn begin_expression(&mut self, precedence: Precedence) {
         self.skip_nl();
-        match self.peek() {
+        match *self.peek() {
             Token::Sub => {
                 self.advance();
                 self.push_state(State::EndPrefixExpression(precedence, UnOp::Neg));
                 self.push_state(State::BeginExpression(Precedence::Prefix));
             }
-            &Token::Integer(v) => {
+            Token::Integer(v) => {
                 self.advance();
                 let left = self.ast.push_node(Expr::Integer(v));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
-            &Token::Float(v) => {
+            Token::Float(v) => {
                 self.advance();
                 let left = self.ast.push_node(Expr::Float(v));
+                self.push_state(State::BeginExpressionInfix(precedence, left));
+            }
+            Token::Identifier(ref name) => {
+                let name = name.clone();
+                self.advance();
+                let left = self.ast.push_node(Expr::Var(name));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
             _ => {

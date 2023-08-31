@@ -17,6 +17,10 @@ pub enum Instruction {
     Return {
         register: Register,
     },
+    Move {
+        destination: Register,
+        from: Register,
+    },
     LoadConstant {
         destination: Register,
         constant: ConstantIndex,

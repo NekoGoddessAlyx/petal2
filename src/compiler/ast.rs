@@ -48,7 +48,7 @@ impl<S: Display> Display for Ast<S> {
 #[derive(Debug)]
 pub enum Node<S> {
     Stat(Stat<S>),
-    Expr(Expr),
+    Expr(Expr<S>),
 }
 
 impl<S> From<Stat<S>> for Node<S> {
@@ -57,8 +57,8 @@ impl<S> From<Stat<S>> for Node<S> {
     }
 }
 
-impl<S> From<Expr> for Node<S> {
-    fn from(value: Expr) -> Self {
+impl<S> From<Expr<S>> for Node<S> {
+    fn from(value: Expr<S>) -> Self {
         Node::Expr(value)
     }
 }
@@ -71,9 +71,10 @@ pub enum Stat<S> {
 }
 
 #[derive(Debug)]
-pub enum Expr {
+pub enum Expr<S> {
     Integer(i64),
     Float(f64),
+    Var(S),
     UnOp(UnOp, NodeRef),
     BinOp(BinOp, NodeRef, NodeRef),
 }
@@ -117,7 +118,7 @@ impl<S> Write for AstPrettyPrinter<'_, '_, S> {
 enum State<'ast, S> {
     EnterStat(&'ast Stat<S>),
     ExitStat(&'ast Stat<S>),
-    EnterExpr(&'ast Expr),
+    EnterExpr(&'ast Expr<S>),
     ContinueBinExpr(BinOp),
     EndBinExpr,
 }
@@ -169,7 +170,7 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
         }
     }
 
-    fn get_expression(&self, index: NodeRef) -> Result<&'ast Expr> {
+    fn get_expression(&self, index: NodeRef) -> Result<&'ast Expr<S>> {
         match self.get_node(index) {
             Node::Expr(node) => Ok(node),
             _ => Err(PrinterErr::UnexpectedNode),
@@ -256,10 +257,11 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
         }
     }
 
-    fn enter_expr(&mut self, node: &Expr) -> Result<()> {
+    fn enter_expr(&mut self, node: &Expr<S>) -> Result<()> {
         match *node {
             Expr::Integer(v) => write!(self, "{}", v)?,
             Expr::Float(v) => write!(self, "{}", v)?,
+            Expr::Var(ref v) => write!(self, "{}", v)?,
             Expr::UnOp(op, right) => {
                 match op {
                     UnOp::Neg => write!(self, "-")?,

@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-use crate::compiler::ast::{BinOp, Expr, NodeRef, RefLen, UnOp};
+use crate::compiler::ast::{BinOp, NodeRef, RefLen, UnOp};
 use crate::compiler::registers::{Register, Registers};
 use crate::prototype::{ConstantIndex, Instruction, Prototype};
 use crate::value::Value;
@@ -10,13 +10,16 @@ use crate::{PString, StringInterner};
 type Ast = crate::compiler::ast::Ast<PString>;
 type Node = crate::compiler::ast::Node<PString>;
 type Stat = crate::compiler::ast::Stat<PString>;
+type Expr = crate::compiler::ast::Expr<PString>;
 
 #[derive(Debug)]
 pub enum CodeGenError {
     UnexpectedNode,
     BadStateTransfer,
     NoScopeAvailable,
-    NameInScope,
+    NameAlreadyInScope,
+    NameNotInScope,
+    UnboundLocal,
     NoRegistersAvailable,
     ConstantPoolFull,
 }
@@ -28,7 +31,7 @@ pub fn code_gen<I: StringInterner<String = PString>>(
     mut strings: I,
 ) -> Result<Prototype> {
     let name = strings.intern(b"test");
-    let mut current_function = PrototypeBuilder {
+    let current_function = PrototypeBuilder {
         name,
         scopes: Vec::with_capacity(8),
         num_locals: 0,
@@ -52,7 +55,6 @@ pub fn code_gen<I: StringInterner<String = PString>>(
 
     let root_ref = ast.root();
     let root = code_gen.get_statement(root_ref)?;
-    code_gen.push_state(State::ExitStat);
     code_gen.push_state(State::EnterStat(root));
 
     code_gen.visit()?;
@@ -249,7 +251,7 @@ impl<'ast, 'prototype, I: StringInterner<String = PString>> CodeGen<'ast, I> {
             .ok_or(CodeGenError::NoScopeAvailable)?;
 
         match scope.0.entry(name) {
-            Entry::Occupied(_) => Err(CodeGenError::NameInScope),
+            Entry::Occupied(_) => Err(CodeGenError::NameAlreadyInScope),
             Entry::Vacant(entry) => {
                 let local = Local(self.current_function.num_locals);
                 entry.insert(local);
@@ -395,6 +397,27 @@ impl<'ast, 'prototype, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
     fn enter_expression(&mut self, node: &Expr) -> Result<()> {
         match *node {
+            Expr::Var(ref var) => {
+                let local = self
+                    .lookup(var.clone())
+                    .ok_or(CodeGenError::NameNotInScope)?;
+                let from = self
+                    .current_function
+                    .registers
+                    .address_of_local(local)
+                    .ok_or(CodeGenError::UnboundLocal)?;
+                let destination = self
+                    .current_function
+                    .registers
+                    .allocate_any()
+                    .ok_or(CodeGenError::NoRegistersAvailable)?;
+                self.push_instruction(Instruction::Move {
+                    destination: destination.into(),
+                    from: from.into(),
+                });
+                self.push_state(State::ExitExpr(destination));
+                Ok(())
+            }
             Expr::Integer(v) => {
                 let register = self
                     .current_function

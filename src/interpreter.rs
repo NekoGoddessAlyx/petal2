@@ -46,6 +46,7 @@ pub fn interpret(function: Prototype) -> Result<Value, InterpretResult> {
                 Instruction::Return { register } => {
                     return Ok(peek!(register));
                 }
+                Instruction::Move { destination, from } => mov!(destination, peek!(from)),
                 Instruction::LoadConstant {
                     destination,
                     constant,
