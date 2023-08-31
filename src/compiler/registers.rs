@@ -1,3 +1,5 @@
+use crate::compiler::code_gen::Local;
+
 #[derive(Copy, Clone, Default, Debug)]
 pub struct Register(u8);
 
@@ -10,6 +12,8 @@ impl From<Register> for crate::prototype::Register {
 pub struct Registers {
     /// Register state: in use?
     registers: [bool; 256],
+    /// Maps local indices to registers
+    locals: [u8; 256],
     /// Location of first free register (or 256 if no free registers)
     first_free: u16,
     /// The location after the largest register in use (or 256 if no free registers)
@@ -22,18 +26,43 @@ impl Registers {
     pub fn new() -> Self {
         Self {
             registers: [false; 256],
+            locals: [0; 256],
             first_free: 0,
             stack_top: 0,
             stack_size: 0,
         }
     }
 
-    // pub fn stack_top(&self) -> u16 {
-    //     self.stack_top
-    // }
+    pub fn stack_top(&self) -> u16 {
+        self.stack_top
+    }
 
     pub fn stack_size(&self) -> u16 {
         self.stack_size
+    }
+
+    /// Assigns a local to a register.
+    ///
+    /// The register must already be allocated.
+    pub fn assign_local(&mut self, local: Local, register: Register) {
+        assert!(
+            self.registers[register.0 as usize],
+            "Register {} must be allocated",
+            register.0
+        );
+        self.locals[local.0 as usize] = register.0
+    }
+
+    /// Returns the register assigned to a given local.
+    ///
+    /// The register must still be allocated or None will be returned.
+    #[must_use]
+    pub fn address_of_local(&mut self, local: Local) -> Option<Register> {
+        let register = self.locals[local.0 as usize];
+        if !self.registers[register as usize] {
+            return None;
+        }
+        Some(Register(register))
     }
 
     /// Allocates any free register.
@@ -77,6 +106,25 @@ impl Registers {
         self.first_free = self.first_free.min(register);
         if register + 1 == self.stack_top {
             self.stack_top = register;
+
+            for i in (self.first_free..self.stack_top).rev() {
+                if self.registers[i as usize] {
+                    break;
+                }
+                self.stack_top = i;
+            }
+        }
+    }
+
+    /// Frees all registers allocated above the given register
+    pub fn pop_to(&mut self, new_top: u16) {
+        if self.stack_top > new_top {
+            for i in new_top..self.stack_top {
+                self.registers[i as usize] = false;
+            }
+            self.stack_top = new_top;
+
+            self.first_free = self.first_free.min(self.stack_top);
 
             for i in (self.first_free..self.stack_top).rev() {
                 if self.registers[i as usize] {
