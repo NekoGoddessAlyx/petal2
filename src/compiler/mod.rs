@@ -132,6 +132,7 @@ where
         }
     };
     println!("Ast: {:?}", ast);
+    println!("Ast (pretty): {}", ast);
 
     match code_gen(ast, strings) {
         Ok(prototype) => Ok(prototype),
