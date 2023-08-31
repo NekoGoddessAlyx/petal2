@@ -91,16 +91,17 @@ enum State<'ast> {
     ExitStat,
 
     ExitCompoundStat(u16),
-    ExitVarDecl(Local),
+    ExitVarDecl,
     ExitExprStat,
 
     // expressions
-    EnterExpr(&'ast Expr),
-    ExitExpr(Register),
+    EnterExprAnywhere(&'ast Expr),
+    EnterExpr(&'ast Expr, ExprDest),
+    ExitExpr(MaybeTempRegister),
 
-    ExitUnaryExpr(UnOp),
-    ContinueBinaryExpr(BinOp, &'ast Expr),
-    ExitBinaryExpr(BinOp, Register),
+    ExitUnaryExpr(UnOp, ExprDest),
+    ContinueBinaryExpr(BinOp, &'ast Expr, ExprDest),
+    ExitBinaryExpr(BinOp, MaybeTempRegister, ExprDest),
 }
 
 impl<'ast> State<'ast> {
@@ -129,7 +130,7 @@ impl<'ast> State<'ast> {
                 Some(State::EnterStat(..))
                 | Some(State::ExitStat)
                 | Some(State::ExitCompoundStat(..))
-                | Some(State::ExitVarDecl(..))
+                | Some(State::ExitVarDecl)
                 | Some(State::ExitExprStat) => Ok(()),
                 _ => fail_transfer!(),
             },
@@ -140,10 +141,8 @@ impl<'ast> State<'ast> {
                 }
                 _ => fail_transfer!(),
             },
-            State::ExitVarDecl(local) => match from {
-                Some(State::ExitExpr(register)) => {
-                    code_gen.exit_variable_declaration(*local, register)
-                }
+            State::ExitVarDecl => match from {
+                Some(State::ExitExpr(register)) => code_gen.exit_variable_declaration(register),
                 _ => fail_transfer!(),
             },
             State::ExitExprStat => match from {
@@ -152,31 +151,46 @@ impl<'ast> State<'ast> {
             },
 
             // expressions
-            State::EnterExpr(expression) => match from {
+            State::EnterExprAnywhere(expression) => match from {
+                Some(State::EnterStat(..))
+                | Some(State::EnterExprAnywhere(..))
+                | Some(State::ContinueBinaryExpr(..)) => {
+                    code_gen.enter_expression_anywhere(expression)
+                }
+                _ => fail_transfer!(),
+            },
+            State::EnterExpr(expression, dest) => match from {
                 Some(State::EnterStat(..))
                 | Some(State::EnterExpr(..))
-                | Some(State::ContinueBinaryExpr(..)) => code_gen.enter_expression(expression),
+                | Some(State::ContinueBinaryExpr(..)) => {
+                    code_gen.enter_expression(expression, *dest)
+                }
                 _ => fail_transfer!(),
             },
             State::ExitExpr(..) => match from {
-                Some(State::EnterExpr(..))
+                Some(State::EnterExprAnywhere(..))
+                | Some(State::EnterExpr(..))
                 | Some(State::ExitUnaryExpr(..))
                 | Some(State::ExitBinaryExpr(..)) => Ok(()),
                 _ => fail_transfer!(),
             },
 
-            State::ExitUnaryExpr(op) => match from {
-                Some(State::ExitExpr(register)) => code_gen.exit_unary_expression(*op, register),
-                _ => fail_transfer!(),
-            },
-            State::ContinueBinaryExpr(op, right) => match from {
-                Some(State::ExitExpr(left)) => {
-                    code_gen.continue_binary_expression(*op, left, right)
+            State::ExitUnaryExpr(op, dest) => match from {
+                Some(State::ExitExpr(register)) => {
+                    code_gen.exit_unary_expression(*op, register, *dest)
                 }
                 _ => fail_transfer!(),
             },
-            State::ExitBinaryExpr(op, left) => match from {
-                Some(State::ExitExpr(right)) => code_gen.exit_binary_expression(*op, *left, right),
+            State::ContinueBinaryExpr(op, right, dest) => match from {
+                Some(State::ExitExpr(left)) => {
+                    code_gen.continue_binary_expression(*op, left, right, *dest)
+                }
+                _ => fail_transfer!(),
+            },
+            State::ExitBinaryExpr(op, left, dest) => match from {
+                Some(State::ExitExpr(right)) => {
+                    code_gen.exit_binary_expression(*op, *left, right, *dest)
+                }
                 _ => fail_transfer!(),
             },
         }
@@ -195,7 +209,7 @@ struct CodeGen<'ast, I: StringInterner<String = PString>> {
     current_function: PrototypeBuilder,
 }
 
-impl<'ast, 'prototype, I: StringInterner<String = PString>> CodeGen<'ast, I> {
+impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     fn get_node(&self, index: NodeRef) -> &'ast Node {
         &self.nodes[index.0 as usize]
     }
@@ -273,6 +287,24 @@ impl<'ast, 'prototype, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         None
     }
 
+    fn allocate(&mut self, dest: ExprDest) -> Result<MaybeTempRegister> {
+        Ok(match dest {
+            ExprDest::Register(register) => MaybeTempRegister::Protected(register),
+            ExprDest::Anywhere => MaybeTempRegister::Temporary(
+                self.current_function
+                    .registers
+                    .allocate_any()
+                    .ok_or(CodeGenError::NoRegistersAvailable)?,
+            ),
+        })
+    }
+
+    fn free_temp(&mut self, register: MaybeTempRegister) {
+        if let MaybeTempRegister::Temporary(register) = register {
+            self.current_function.registers.free(register);
+        }
+    }
+
     fn push_instruction(&mut self, instruction: Instruction) {
         self.current_function.instructions.push(instruction);
     }
@@ -331,34 +363,39 @@ impl<'ast, 'prototype, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                 self.begin_scope();
                 let stack_top = self.current_function.registers.stack_top();
                 self.push_state(State::ExitCompoundStat(stack_top));
+
                 let statements = self.get_refs(*len).iter().rev();
                 for statement in statements {
                     let statement = self.get_statement(*statement)?;
                     self.push_state(State::EnterStat(statement));
                 }
+
                 Ok(())
             }
             Stat::VarDecl(name, definition) => {
                 let local = self.declare(name.clone())?;
+                let register = self
+                    .current_function
+                    .registers
+                    .allocate_any()
+                    .ok_or(CodeGenError::NoRegistersAvailable)?;
+                self.current_function
+                    .registers
+                    .assign_local(local, register);
 
                 match definition {
                     Some(definition) => {
                         let definition = self.get_expression(*definition)?;
-                        self.push_state(State::ExitVarDecl(local));
-                        self.push_state(State::EnterExpr(definition));
+                        self.push_state(State::ExitVarDecl);
+                        self.push_state(State::EnterExpr(definition, ExprDest::Register(register)));
                     }
                     None => {
-                        let register = self
-                            .current_function
-                            .registers
-                            .allocate_any()
-                            .ok_or(CodeGenError::NoRegistersAvailable)?;
                         let constant = self.push_constant(Value::Integer(0))?;
                         self.push_instruction(Instruction::LoadConstant {
                             destination: register.into(),
-                            constant: constant.into(),
+                            constant,
                         });
-                        self.exit_variable_declaration(local, register)?;
+                        self.exit_variable_declaration(MaybeTempRegister::Protected(register))?;
                     }
                 }
                 Ok(())
@@ -366,7 +403,7 @@ impl<'ast, 'prototype, I: StringInterner<String = PString>> CodeGen<'ast, I> {
             Stat::Expr(expression) => {
                 let expression = self.get_expression(*expression)?;
                 self.push_state(State::ExitExprStat);
-                self.push_state(State::EnterExpr(expression));
+                self.push_state(State::EnterExprAnywhere(expression));
                 Ok(())
             }
         }
@@ -379,150 +416,163 @@ impl<'ast, 'prototype, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         Ok(())
     }
 
-    fn exit_variable_declaration(&mut self, local: Local, register: Register) -> Result<()> {
-        self.current_function
-            .registers
-            .assign_local(local, register);
+    fn exit_variable_declaration(&mut self, register: MaybeTempRegister) -> Result<()> {
+        assert!(
+            matches!(register, MaybeTempRegister::Protected(_)),
+            "Register must be protected"
+        );
         self.push_state(State::ExitStat);
         Ok(())
     }
 
-    fn exit_expression_statement(&mut self, register: Register) -> Result<()> {
-        self.current_function.registers.free(register);
+    fn exit_expression_statement(&mut self, register: MaybeTempRegister) -> Result<()> {
+        self.free_temp(register);
         self.push_state(State::ExitStat);
         Ok(())
     }
 
     // expressions
 
-    fn enter_expression(&mut self, node: &Expr) -> Result<()> {
+    fn enter_expression_anywhere(&mut self, node: &Expr) -> Result<()> {
         match *node {
             Expr::Var(ref var) => {
                 let local = self
                     .lookup(var.clone())
                     .ok_or(CodeGenError::NameNotInScope)?;
-                let from = self
+                let local = self
                     .current_function
                     .registers
                     .address_of_local(local)
                     .ok_or(CodeGenError::UnboundLocal)?;
-                let destination = self
-                    .current_function
-                    .registers
-                    .allocate_any()
-                    .ok_or(CodeGenError::NoRegistersAvailable)?;
-                self.push_instruction(Instruction::Move {
-                    destination: destination.into(),
-                    from: from.into(),
-                });
-                self.push_state(State::ExitExpr(destination));
+                self.push_state(State::ExitExpr(MaybeTempRegister::Protected(local)));
                 Ok(())
             }
+            _ => self.enter_expression(node, ExprDest::Anywhere),
+        }
+    }
+
+    fn enter_expression(&mut self, node: &Expr, dest: ExprDest) -> Result<()> {
+        match *node {
             Expr::Integer(v) => {
-                let register = self
-                    .current_function
-                    .registers
-                    .allocate_any()
-                    .ok_or(CodeGenError::NoRegistersAvailable)?;
+                let dest = self.allocate(dest)?;
                 let constant = self.push_constant(Value::Integer(v))?;
                 self.push_instruction(Instruction::LoadConstant {
-                    destination: register.into(),
+                    destination: dest.into(),
                     constant,
                 });
-                self.push_state(State::ExitExpr(register));
+                self.push_state(State::ExitExpr(dest));
                 Ok(())
             }
             Expr::Float(v) => {
-                let register = self
-                    .current_function
-                    .registers
-                    .allocate_any()
-                    .ok_or(CodeGenError::NoRegistersAvailable)?;
+                let dest = self.allocate(dest)?;
                 let constant = self.push_constant(Value::Float(v))?;
                 self.push_instruction(Instruction::LoadConstant {
-                    destination: register.into(),
+                    destination: dest.into(),
                     constant,
                 });
-                self.push_state(State::ExitExpr(register));
+                self.push_state(State::ExitExpr(dest));
+                Ok(())
+            }
+            Expr::Var(ref var) => {
+                let dest = self.allocate(dest)?;
+                let local = self
+                    .lookup(var.clone())
+                    .ok_or(CodeGenError::NameNotInScope)?;
+                let local = self
+                    .current_function
+                    .registers
+                    .address_of_local(local)
+                    .ok_or(CodeGenError::UnboundLocal)?;
+                if local != dest.into() {
+                    self.push_instruction(Instruction::Move {
+                        destination: dest.into(),
+                        from: local.into(),
+                    });
+                }
+                self.push_state(State::ExitExpr(dest));
                 Ok(())
             }
             Expr::UnOp(op, right) => {
-                self.push_state(State::ExitUnaryExpr(op));
+                self.push_state(State::ExitUnaryExpr(op, dest));
                 let right = self.get_expression(right)?;
-                self.push_state(State::EnterExpr(right));
+                self.push_state(State::EnterExprAnywhere(right));
                 Ok(())
             }
             Expr::BinOp(op, left, right) => {
                 let right = self.get_expression(right)?;
-                self.push_state(State::ContinueBinaryExpr(op, right));
+                self.push_state(State::ContinueBinaryExpr(op, right, dest));
                 let left = self.get_expression(left)?;
-                self.push_state(State::EnterExpr(left));
+                self.push_state(State::EnterExprAnywhere(left));
                 Ok(())
             }
         }
     }
 
-    fn exit_unary_expression(&mut self, op: UnOp, from: Register) -> Result<()> {
-        self.current_function.registers.free(from);
-        let destination = self
-            .current_function
-            .registers
-            .allocate_any()
-            .ok_or(CodeGenError::NoRegistersAvailable)?;
+    fn exit_unary_expression(
+        &mut self,
+        op: UnOp,
+        from: MaybeTempRegister,
+        dest: ExprDest,
+    ) -> Result<()> {
+        self.free_temp(from);
+        let dest = self.allocate(dest)?;
         let instruction = match op {
             UnOp::Neg => Instruction::Neg {
-                destination: destination.into(),
+                destination: dest.into(),
                 right: from.into(),
             },
         };
         self.push_instruction(instruction);
-        self.push_state(State::ExitExpr(destination));
+        self.push_state(State::ExitExpr(dest));
         Ok(())
     }
 
     fn continue_binary_expression(
         &mut self,
         op: BinOp,
-        left: Register,
+        left: MaybeTempRegister,
         right: &'ast Expr,
+        dest: ExprDest,
     ) -> Result<()> {
-        self.push_state(State::ExitBinaryExpr(op, left));
-        self.push_state(State::EnterExpr(right));
+        self.push_state(State::ExitBinaryExpr(op, left, dest));
+        self.push_state(State::EnterExprAnywhere(right));
         Ok(())
     }
 
-    fn exit_binary_expression(&mut self, op: BinOp, left: Register, right: Register) -> Result<()> {
-        self.current_function.registers.free(left);
-        self.current_function.registers.free(right);
-        let destination = self
-            .current_function
-            .registers
-            .allocate_any()
-            .ok_or(CodeGenError::NoRegistersAvailable)?;
+    fn exit_binary_expression(
+        &mut self,
+        op: BinOp,
+        left: MaybeTempRegister,
+        right: MaybeTempRegister,
+        dest: ExprDest,
+    ) -> Result<()> {
+        self.free_temp(left);
+        self.free_temp(right);
+        let dest = self.allocate(dest)?;
         let instruction = match op {
             BinOp::Add => Instruction::Add {
-                destination: destination.into(),
+                destination: dest.into(),
                 left: left.into(),
                 right: right.into(),
             },
             BinOp::Sub => Instruction::Sub {
-                destination: destination.into(),
+                destination: dest.into(),
                 left: left.into(),
                 right: right.into(),
             },
             BinOp::Mul => Instruction::Mul {
-                destination: destination.into(),
+                destination: dest.into(),
                 left: left.into(),
                 right: right.into(),
             },
             BinOp::Div => Instruction::Div {
-                destination: destination.into(),
+                destination: dest.into(),
                 left: left.into(),
                 right: right.into(),
             },
         };
         self.push_instruction(instruction);
-        self.push_state(State::ExitExpr(destination));
+        self.push_state(State::ExitExpr(dest));
         Ok(())
     }
 }
@@ -537,4 +587,37 @@ impl Scope {
     fn new() -> Self {
         Self(HashMap::new())
     }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum MaybeTempRegister {
+    /// Should not be freed after use
+    Protected(Register),
+    /// Should be freed after use
+    Temporary(Register),
+}
+
+impl From<MaybeTempRegister> for Register {
+    fn from(value: MaybeTempRegister) -> Self {
+        match value {
+            MaybeTempRegister::Protected(r) | MaybeTempRegister::Temporary(r) => r,
+        }
+    }
+}
+
+impl From<MaybeTempRegister> for crate::prototype::Register {
+    fn from(value: MaybeTempRegister) -> Self {
+        match value {
+            MaybeTempRegister::Protected(r) | MaybeTempRegister::Temporary(r) => r.into(),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+#[must_use]
+enum ExprDest {
+    /// Existing register
+    Register(Register),
+    /// Allocated a register anywhere
+    Anywhere,
 }
