@@ -212,9 +212,11 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
     }
 
     fn enter_stat(&mut self, node: &Stat<S>) -> Result<()> {
+        writeln!(self)?;
+
         match node {
             Stat::Compound(len) => {
-                writeln!(self, "{{")?;
+                write!(self, "{{")?;
                 self.indent();
                 let statements = self.get_refs(*len).iter().rev();
                 for statement in statements {
@@ -245,17 +247,12 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
         match node {
             Stat::Compound(..) => {
                 self.unindent();
-                writeln!(self, "}}")?;
-                Ok(())
-            }
-            Stat::VarDecl(..) => {
                 writeln!(self)?;
+                write!(self, "}}")?;
                 Ok(())
             }
-            Stat::Expr(..) => {
-                writeln!(self)?;
-                Ok(())
-            }
+            Stat::VarDecl(..) => Ok(()),
+            Stat::Expr(..) => Ok(()),
         }
     }
 
