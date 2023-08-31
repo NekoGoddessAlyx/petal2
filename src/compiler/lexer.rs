@@ -3,8 +3,7 @@ use std::num::NonZeroU32;
 use std::ops::RangeInclusive;
 use std::str::{from_utf8, FromStr};
 
-use crate::compiler::string::{StringRef, Strings};
-use crate::{static_assert_size, StringInterner};
+use crate::compiler::string::{CompileString, NewString};
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum LexerErr {
@@ -26,8 +25,8 @@ impl Display for LexerErr {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Debug)]
-pub enum Token {
+#[derive(Clone, Debug)]
+pub enum Token<S> {
     Var,
 
     Eq,
@@ -40,7 +39,7 @@ pub enum Token {
     Integer(i64),
     Float(f64),
 
-    Identifier(StringRef),
+    Identifier(S),
 
     Nl,
     Eof,
@@ -48,7 +47,15 @@ pub enum Token {
     Err(LexerErr),
 }
 
-static_assert_size!(Token, 16);
+impl<S> PartialEq for Token<S> {
+    fn eq(&self, other: &Self) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
+}
+
+// TODO: this just became more difficult to accomplish
+// worry about it later
+// static_assert_size!(Token<PString>, 16);
 
 #[derive(Copy, Clone, Debug)]
 pub struct Span {
@@ -82,14 +89,14 @@ impl From<LineNumber> for usize {
 }
 
 #[derive(Debug)]
-pub struct Source<'source> {
+pub struct Source<'source, S> {
     pub bytes: &'source [u8],
-    pub tokens: Box<[Token]>,
+    pub tokens: Box<[Token<S>]>,
     pub locations: Box<[Span]>,
     pub line_starts: Box<[u32]>,
 }
 
-impl<'source> Source<'source> {
+impl<'source, S> Source<'source, S> {
     pub fn get_bytes_at(&self, span: Span) -> Option<&'source [u8]> {
         assert!(span.start <= span.end);
         self.bytes.get(span.start as usize..span.end as usize)
@@ -123,13 +130,14 @@ impl<'source> Source<'source> {
     }
 }
 
-pub fn lex<'source, 'strings, I: StringInterner>(
-    source: &'source [u8],
-    strings: &'strings mut Strings<I>,
-) -> Source<'source> {
+pub fn lex<NS, S>(source: &[u8], new_string: NS) -> Source<S>
+where
+    NS: NewString<S>,
+    S: CompileString,
+{
     let mut lexer = Lexer {
         source,
-        strings,
+        new_string,
         buffer: Vec::with_capacity(16),
         cursor: Span { start: 0, end: 0 },
         line_cursor: Span { start: 0, end: 0 },
@@ -172,19 +180,23 @@ pub fn lex<'source, 'strings, I: StringInterner>(
     }
 }
 
-struct Lexer<'source, I: StringInterner> {
+struct Lexer<'source, NS, S> {
     source: &'source [u8],
-    strings: &'source mut Strings<I>,
+    new_string: NS,
     buffer: Vec<u8>,
     cursor: Span,
     line_cursor: Span,
     line_number: u32,
-    tokens: Vec<Token>,
+    tokens: Vec<Token<S>>,
     locations: Vec<Span>,
     line_starts: Vec<u32>,
 }
 
-impl<I: StringInterner> Lexer<'_, I> {
+impl<NS, S> Lexer<'_, NS, S>
+where
+    NS: NewString<S>,
+    S: CompileString,
+{
     fn on_error(&mut self, err: LexerErr) {
         self.push_token(Token::Err(err));
     }
@@ -211,7 +223,7 @@ impl<I: StringInterner> Lexer<'_, I> {
         self.cursor.start = self.cursor.end;
     }
 
-    fn push_token(&mut self, token: Token) {
+    fn push_token(&mut self, token: Token<S>) {
         debug_assert_ne!(token, Token::Eof);
 
         self.tokens.push(token);
@@ -346,8 +358,8 @@ impl<I: StringInterner> Lexer<'_, I> {
                 self.push_token(Token::Var);
             }
             _ => {
-                let string_ref = self.strings.push_string(string);
-                self.push_token(Token::Identifier(string_ref));
+                let string = (self.new_string)(string);
+                self.push_token(Token::Identifier(string));
             }
         }
     }

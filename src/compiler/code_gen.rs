@@ -3,7 +3,6 @@ use std::collections::HashMap;
 
 use crate::compiler::ast::{BinOp, Expr, NodeRef, RefLen, UnOp};
 use crate::compiler::registers::{Register, Registers};
-use crate::compiler::string::Strings;
 use crate::prototype::{ConstantIndex, Instruction, Prototype};
 use crate::value::Value;
 use crate::{PString, StringInterner};
@@ -24,9 +23,9 @@ pub type Result<T> = std::result::Result<T, CodeGenError>;
 
 pub fn code_gen<I: StringInterner<String = PString>>(
     ast: Ast,
-    strings: &mut Strings<I>,
+    mut strings: I,
 ) -> Result<Prototype> {
-    let name = strings.new_string(b"test");
+    let name = strings.intern(b"test");
     let mut prototype_builder = PrototypeBuilder {
         name,
         registers: Registers::new(),
@@ -168,7 +167,7 @@ struct CodeGen<'ast, 'prototype, I: StringInterner<String = PString>> {
     refs: &'ast [NodeRef],
     ref_cursor: usize,
 
-    strings: &'ast mut Strings<I>,
+    strings: I,
 
     state: Vec<State<'ast>>,
 

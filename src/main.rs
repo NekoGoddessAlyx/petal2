@@ -1,8 +1,8 @@
 use std::fs::read_to_string;
 
-use petal2::{compile, interpret, CompilerMessage};
+use petal2::{compile, interpret, CompilerMessage, PString};
 
-fn callback(message: CompilerMessage) {
+fn callback(message: CompilerMessage<PString>) {
     println!("{}", message);
 }
 

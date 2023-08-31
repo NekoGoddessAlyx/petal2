@@ -4,9 +4,8 @@ use std::str::from_utf8;
 use crate::compiler::code_gen::code_gen;
 use crate::compiler::lexer::{lex, Source, Span};
 use crate::compiler::parser::parse;
-use crate::compiler::string::Strings;
 use crate::prototype::Prototype;
-use crate::PStringInterner;
+use crate::{PString, PStringInterner, StringInterner};
 
 mod ast;
 mod code_gen;
@@ -22,14 +21,14 @@ mod registers;
 /// contain warnings or other diagnostic information.
 ///
 /// May have information about where this message was generated from.
-pub struct CompilerMessage<'compiler> {
+pub struct CompilerMessage<'compiler, S> {
     message: &'compiler dyn Display,
-    source: &'compiler Source<'compiler>,
+    source: &'compiler Source<'compiler, S>,
     at: Option<Span>,
 }
 
 #[allow(unused)]
-impl CompilerMessage<'_> {
+impl<S> CompilerMessage<'_, S> {
     pub fn message(&self) -> &dyn Display {
         self.message
     }
@@ -40,7 +39,7 @@ impl CompilerMessage<'_> {
     }
 }
 
-impl Display for CompilerMessage<'_> {
+impl<S> Display for CompilerMessage<'_, S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Error: {}", self.message)?;
 
@@ -104,12 +103,11 @@ impl Display for CompilerMessage<'_> {
 // do something
 pub fn compile<C, S>(mut callback: C, source: S) -> Result<Prototype, ()>
 where
-    C: FnMut(CompilerMessage),
+    C: FnMut(CompilerMessage<PString>),
     S: AsRef<[u8]>,
 {
-    let mut strings = Strings::new(PStringInterner::default());
-
-    let source = lex(source.as_ref(), &mut strings);
+    let mut strings = PStringInterner::default();
+    let source = lex(source.as_ref(), |bytes| strings.intern(bytes));
     println!("Tokens: {:?}", source.tokens);
     println!("Locations: {:?}", source.locations);
     println!("Line Starts: {:?}", source.line_starts);
@@ -126,7 +124,7 @@ where
         parser_callback,
         &source.tokens,
         &source.locations,
-        &mut strings,
+        |bytes| strings.intern(bytes),
     ) {
         Ok(ast) => ast,
         Err(_error) => {
@@ -135,59 +133,31 @@ where
     };
     println!("Ast: {:?}", ast);
 
-    match code_gen(ast, &mut strings) {
+    match code_gen(ast, strings) {
         Ok(prototype) => Ok(prototype),
         Err(_error) => Err(()),
     }
 }
 
+#[rustfmt::skip]
 mod string {
-    use crate::StringInterner;
+    use std::borrow::Borrow;
+    use std::fmt::{Debug, Display};
+    use std::ops::Deref;
 
-    // Could probably use the string directly instead of this abstraction
-    // Would make this ref AND the strings type unnecessary
-    // The concern right meow is the size of the PString type
-    // Don't want to make Token any bigger
-    #[derive(Copy, Clone, PartialEq, Debug)]
-    #[repr(transparent)]
-    pub struct StringRef(pub u32);
+    pub trait NewString<S>: FnMut(&[u8]) -> S {}
+    impl<T: FnMut(&[u8]) -> S, S: CompileString> NewString<S> for T {}
 
-    pub struct Strings<I: StringInterner> {
-        interner: I,
-        strings: Vec<I::String>,
-    }
-
-    impl<I: StringInterner> Strings<I> {
-        pub fn new(interner: I) -> Self {
-            Self {
-                interner,
-                strings: Vec::with_capacity(32),
-            }
-        }
-
-        pub fn new_string(&mut self, string: &[u8]) -> I::String {
-            self.interner.intern(string)
-        }
-
-        pub fn push_string(&mut self, string: &[u8]) -> StringRef {
-            let string = self.new_string(string);
-            let index = self.strings.len();
-            self.strings.push(string);
-            StringRef(index as u32)
-        }
-
-        pub fn get_string(&mut self, index: StringRef) -> I::String {
-            self.strings[index.0 as usize].clone()
-        }
-    }
+    pub trait CompileString: Clone + Borrow<[u8]> + AsRef<[u8]> + Deref<Target = [u8]> + Display + Debug {}
+    impl<T: Clone + Borrow<[u8]> + AsRef<[u8]> + Deref<Target = [u8]> + Display + Debug> CompileString for T {}
 }
 
+#[rustfmt::skip]
 mod callback {
     use std::fmt::Display;
 
     use crate::compiler::lexer::Span;
 
     pub trait ParserCallback: FnMut(&dyn Display, Option<Span>) {}
-
     impl<T: FnMut(&dyn Display, Option<Span>)> ParserCallback for T {}
 }

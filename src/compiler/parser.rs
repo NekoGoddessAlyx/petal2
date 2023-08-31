@@ -4,8 +4,7 @@ use crate::compiler::ast::RefLen;
 use crate::compiler::ast::{Ast, BinOp, Expr, NodeRef, Stat, UnOp};
 use crate::compiler::callback::ParserCallback;
 use crate::compiler::lexer::{Span, Token};
-use crate::compiler::string::{StringRef, Strings};
-use crate::StringInterner;
+use crate::compiler::string::{CompileString, NewString};
 
 #[derive(Debug)]
 pub enum ParserError {
@@ -24,21 +23,21 @@ pub enum StateError {
     CannotTransfer,
 }
 
-pub fn parse<C: ParserCallback, I: StringInterner>(
+pub fn parse<C: ParserCallback, NS: NewString<S>, S: CompileString>(
     callback: C,
-    tokens: &[Token],
+    tokens: &[Token<S>],
     locations: &[Span],
-    strings: &mut Strings<I>,
-) -> Result<Ast<I::String>, ParserError> {
+    new_string: NS,
+) -> Result<Ast<S>, ParserError> {
     let len = tokens.len();
     let mut parser = Parser {
         callback,
+        new_string,
         had_error: false,
         panic_mode: false,
         tokens,
         locations,
         cursor: 0,
-        strings,
         state: Vec::with_capacity(32),
         ast: Ast::new(len),
     };
@@ -48,7 +47,7 @@ pub fn parse<C: ParserCallback, I: StringInterner>(
 }
 
 #[derive(Debug)]
-enum State {
+enum State<S> {
     // statements
     BeginStatement,
     EndStatement(NodeRef),
@@ -58,7 +57,7 @@ enum State {
     EndCompoundStatement(RefLen),
 
     BeginVariableDeclaration,
-    EndVariableDeclaration(StringRef),
+    EndVariableDeclaration(S),
 
     BeginExpressionStatement,
     EndExpressionStatement,
@@ -72,11 +71,11 @@ enum State {
     EndBinaryExpression(Precedence, BinOp, NodeRef),
 }
 
-impl State {
-    fn enter<C: ParserCallback, I: StringInterner>(
+impl<S: CompileString> State<S> {
+    fn enter<C: ParserCallback, NS: NewString<S>>(
         &mut self,
-        from: Option<State>,
-        parser: &mut Parser<'_, C, I>,
+        from: Option<State<S>>,
+        parser: &mut Parser<'_, C, NS, S>,
     ) -> Result<(), StateError> {
         macro_rules! fail_transfer {
             () => {{
@@ -85,7 +84,7 @@ impl State {
             }};
         }
 
-        match *self {
+        match self {
             // statements
             State::BeginStatement => match from {
                 Some(State::BeginCompoundStatement)
@@ -112,14 +111,14 @@ impl State {
             },
             State::ContinueCompoundStatement(len) => match from {
                 Some(State::EndStatement(statement)) => {
-                    parser.continue_compound_statement(len, statement);
+                    parser.continue_compound_statement(*len, statement);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
             State::EndCompoundStatement(len) => match from {
                 Some(State::ContinueCompoundStatement(..)) => {
-                    parser.end_compound_statement(len);
+                    parser.end_compound_statement(*len);
                     Ok(())
                 }
                 _ => fail_transfer!(),
@@ -134,11 +133,11 @@ impl State {
             },
             State::EndVariableDeclaration(name) => match from {
                 Some(State::BeginVariableDeclaration) => {
-                    parser.end_variable_declaration(name, None);
+                    parser.end_variable_declaration(name.clone(), None);
                     Ok(())
                 }
                 Some(State::EndExpression(expression)) => {
-                    parser.end_variable_declaration(name, Some(expression));
+                    parser.end_variable_declaration(name.clone(), Some(expression));
                     Ok(())
                 }
                 _ => fail_transfer!(),
@@ -165,7 +164,7 @@ impl State {
                 | Some(State::BeginExpressionStatement)
                 | Some(State::BeginExpression(..))
                 | Some(State::BeginExpressionInfix(..)) => {
-                    parser.begin_expression(precedence);
+                    parser.begin_expression(*precedence);
                     Ok(())
                 }
                 _ => fail_transfer!(),
@@ -178,7 +177,7 @@ impl State {
                 Some(State::BeginExpression(..))
                 | Some(State::EndPrefixExpression(..))
                 | Some(State::EndBinaryExpression(..)) => {
-                    parser.begin_expression_infix(precedence, left);
+                    parser.begin_expression_infix(*precedence, *left);
                     Ok(())
                 }
                 _ => fail_transfer!(),
@@ -186,14 +185,14 @@ impl State {
 
             State::EndPrefixExpression(precedence, op) => match from {
                 Some(State::EndExpression(right)) => {
-                    parser.end_prefix_expression(precedence, op, right);
+                    parser.end_prefix_expression(*precedence, *op, right);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
             State::EndBinaryExpression(precedence, op, left) => match from {
                 Some(State::EndExpression(right)) => {
-                    parser.end_binary_expression(precedence, op, left, right);
+                    parser.end_binary_expression(*precedence, *op, *left, right);
                     Ok(())
                 }
                 _ => fail_transfer!(),
@@ -202,19 +201,19 @@ impl State {
     }
 }
 
-struct Parser<'tokens, C, I: StringInterner> {
+struct Parser<'tokens, C, NS, S> {
     callback: C,
+    new_string: NS,
     had_error: bool,
     panic_mode: bool,
-    tokens: &'tokens [Token],
+    tokens: &'tokens [Token<S>],
     locations: &'tokens [Span],
     cursor: usize,
-    strings: &'tokens mut Strings<I>,
-    state: Vec<State>,
-    ast: Ast<I::String>,
+    state: Vec<State<S>>,
+    ast: Ast<S>,
 }
 
-impl<C: ParserCallback, I: StringInterner> Parser<'_, C, I> {
+impl<C: ParserCallback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     fn on_error(&mut self, message: &dyn Display, source: Option<Span>) {
         self.had_error = true;
         if !self.panic_mode {
@@ -223,7 +222,11 @@ impl<C: ParserCallback, I: StringInterner> Parser<'_, C, I> {
         }
     }
 
-    fn peek(&mut self) -> Token {
+    fn new_string(&mut self, bytes: &[u8]) -> S {
+        (self.new_string)(bytes)
+    }
+
+    fn peek(&mut self) -> &Token<S> {
         let mut token = self.tokens.get(self.cursor);
 
         // Report error tokens, advance and continue
@@ -234,7 +237,7 @@ impl<C: ParserCallback, I: StringInterner> Parser<'_, C, I> {
             token = self.tokens.get(self.cursor);
         }
 
-        token.copied().unwrap_or(Token::Eof)
+        token.unwrap_or(&Token::Eof)
     }
 
     fn skip_nl(&mut self) {
@@ -250,8 +253,8 @@ impl<C: ParserCallback, I: StringInterner> Parser<'_, C, I> {
             .copied()
     }
 
-    fn advance(&mut self) -> Token {
-        let token = self.tokens.get(self.cursor).copied().unwrap_or(Token::Eof);
+    fn advance(&mut self) -> Token<S> {
+        let token = self.tokens.get(self.cursor).cloned().unwrap_or(Token::Eof);
         self.cursor += 1;
         token
     }
@@ -265,17 +268,17 @@ impl<C: ParserCallback, I: StringInterner> Parser<'_, C, I> {
         }
     }
 
-    fn push_state(&mut self, state: State) {
+    fn push_state(&mut self, state: State<S>) {
         self.state.push(state);
     }
 
-    fn pop_state(&mut self) -> Option<State> {
+    fn pop_state(&mut self) -> Option<State<S>> {
         self.state.pop()
     }
 
     // parse
 
-    fn parse(mut self) -> Result<Ast<I::String>, ParserError> {
+    fn parse(mut self) -> Result<Ast<S>, ParserError> {
         let mut previous = None;
 
         while let Some(mut state) = self.pop_state() {
@@ -284,7 +287,7 @@ impl<C: ParserCallback, I: StringInterner> Parser<'_, C, I> {
         }
 
         self.skip_nl();
-        if self.peek() != Token::Eof {
+        if self.peek() != &Token::Eof {
             self.on_error(&"Could not read all tokens", self.peek_location());
         }
 
@@ -349,30 +352,27 @@ impl<C: ParserCallback, I: StringInterner> Parser<'_, C, I> {
     fn begin_variable_declaration(&mut self) {
         self.skip_nl();
         let name = match self.peek() {
-            Token::Identifier(index) => {
+            Token::Identifier(name) => {
+                let name = name.clone();
                 self.advance();
-                index
+                name
             }
             _ => {
                 self.on_error(&"Expected variable name", self.peek_location());
-                self.strings.push_string(b"")
+                self.new_string(b"")
             }
         };
 
         self.push_state(State::EndVariableDeclaration(name));
 
         // do not skip NL
-        match self.peek() {
-            Token::Eq => {
-                self.advance();
-                self.push_state(State::BeginExpression(Precedence::root()));
-            }
-            _ => {}
+        if let Token::Eq = self.peek() {
+            self.advance();
+            self.push_state(State::BeginExpression(Precedence::root()));
         }
     }
 
-    fn end_variable_declaration(&mut self, name: StringRef, init: Option<NodeRef>) {
-        let name = self.strings.get_string(name);
+    fn end_variable_declaration(&mut self, name: S, init: Option<NodeRef>) {
         let statement = self.ast.push_node(Stat::VarDecl(name, init));
         self.push_state(State::EndStatement(statement));
         self.end_of_statement();
@@ -399,12 +399,12 @@ impl<C: ParserCallback, I: StringInterner> Parser<'_, C, I> {
                 self.push_state(State::EndPrefixExpression(precedence, UnOp::Neg));
                 self.push_state(State::BeginExpression(Precedence::Prefix));
             }
-            Token::Integer(v) => {
+            &Token::Integer(v) => {
                 self.advance();
                 let left = self.ast.push_node(Expr::Integer(v));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
-            Token::Float(v) => {
+            &Token::Float(v) => {
                 self.advance();
                 let left = self.ast.push_node(Expr::Float(v));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
@@ -497,7 +497,7 @@ impl Precedence {
     }
 }
 
-fn get_precedence(token: Token) -> Precedence {
+fn get_precedence<S>(token: &Token<S>) -> Precedence {
     match token {
         Token::Add | Token::Sub => Precedence::Additive,
         Token::Mul | Token::Div => Precedence::Multiplicative,
@@ -512,7 +512,7 @@ fn get_precedence(token: Token) -> Precedence {
     }
 }
 
-fn is_statement(token: Token) -> bool {
+fn is_statement<S>(token: &Token<S>) -> bool {
     match token {
         Token::Var => true,
         token if is_expression(token) => true,
@@ -520,7 +520,7 @@ fn is_statement(token: Token) -> bool {
     }
 }
 
-fn is_expression(token: Token) -> bool {
+fn is_expression<S>(token: &Token<S>) -> bool {
     match token {
         Token::Integer(_) | Token::Float(_) => true,
         _ => false,

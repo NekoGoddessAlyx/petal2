@@ -8,8 +8,6 @@ macro_rules! static_assert_size {
     };
 }
 
-pub(crate) use static_assert_size;
-
 mod compiler;
 mod interpreter;
 mod pretty_formatter;
