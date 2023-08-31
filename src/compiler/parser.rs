@@ -318,11 +318,11 @@ impl<C: ParserCallback, I: StringInterner> Parser<'_, C, I> {
             self.panic_mode = false;
 
             loop {
-                if is_statement(self.peek()) {
-                    break;
-                }
-
-                self.advance();
+                match self.peek() {
+                    Token::Eof => break,
+                    token if is_statement(token) => break,
+                    _ => self.advance(),
+                };
             }
         }
 
