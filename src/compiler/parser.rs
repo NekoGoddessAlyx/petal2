@@ -4,6 +4,8 @@ use crate::compiler::ast::RefLen;
 use crate::compiler::ast::{Ast, BinOp, Expr, NodeRef, Stat, UnOp};
 use crate::compiler::callback::ParserCallback;
 use crate::compiler::lexer::{Span, Token};
+use crate::compiler::string::{StringRef, Strings};
+use crate::StringInterner;
 
 #[derive(Debug)]
 pub enum ParserError {
@@ -22,11 +24,12 @@ pub enum StateError {
     CannotTransfer,
 }
 
-pub fn parse<C: ParserCallback>(
+pub fn parse<C: ParserCallback, I: StringInterner>(
     callback: C,
     tokens: &[Token],
     locations: &[Span],
-) -> Result<Ast, ParserError> {
+    strings: &mut Strings<I>,
+) -> Result<Ast<I::String>, ParserError> {
     let len = tokens.len();
     let mut parser = Parser {
         callback,
@@ -35,6 +38,7 @@ pub fn parse<C: ParserCallback>(
         tokens,
         locations,
         cursor: 0,
+        strings,
         state: Vec::with_capacity(32),
         ast: Ast::new(len),
     };
@@ -53,6 +57,9 @@ enum State {
     ContinueCompoundStatement(RefLen),
     EndCompoundStatement(RefLen),
 
+    BeginVariableDeclaration,
+    EndVariableDeclaration(StringRef),
+
     BeginExpressionStatement,
     EndExpressionStatement,
 
@@ -66,10 +73,10 @@ enum State {
 }
 
 impl State {
-    fn enter<C: ParserCallback>(
+    fn enter<C: ParserCallback, I: StringInterner>(
         &mut self,
         from: Option<State>,
-        parser: &mut Parser<'_, C>,
+        parser: &mut Parser<'_, C, I>,
     ) -> Result<(), StateError> {
         macro_rules! fail_transfer {
             () => {{
@@ -89,7 +96,9 @@ impl State {
                 _ => fail_transfer!(),
             },
             State::EndStatement(..) => match from {
-                Some(State::EndExpressionStatement) => Ok(()),
+                Some(State::EndVariableDeclaration(..)) | Some(State::EndExpressionStatement) => {
+                    Ok(())
+                }
                 _ => fail_transfer!(),
             },
 
@@ -115,6 +124,26 @@ impl State {
                 }
                 _ => fail_transfer!(),
             },
+
+            State::BeginVariableDeclaration => match from {
+                Some(State::BeginStatement) => {
+                    parser.begin_variable_declaration();
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+            State::EndVariableDeclaration(name) => match from {
+                Some(State::BeginVariableDeclaration) => {
+                    parser.end_variable_declaration(name, None);
+                    Ok(())
+                }
+                Some(State::EndExpression(expression)) => {
+                    parser.end_variable_declaration(name, Some(expression));
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+
             State::BeginExpressionStatement => match from {
                 Some(State::BeginStatement) => {
                     parser.begin_expression_statement();
@@ -132,7 +161,8 @@ impl State {
 
             // expressions
             State::BeginExpression(precedence) => match from {
-                Some(State::BeginExpressionStatement)
+                Some(State::BeginVariableDeclaration)
+                | Some(State::BeginExpressionStatement)
                 | Some(State::BeginExpression(..))
                 | Some(State::BeginExpressionInfix(..)) => {
                     parser.begin_expression(precedence);
@@ -172,18 +202,19 @@ impl State {
     }
 }
 
-struct Parser<'tokens, C> {
+struct Parser<'tokens, C, I: StringInterner> {
     callback: C,
     had_error: bool,
     panic_mode: bool,
     tokens: &'tokens [Token],
     locations: &'tokens [Span],
     cursor: usize,
+    strings: &'tokens mut Strings<I>,
     state: Vec<State>,
-    ast: Ast,
+    ast: Ast<I::String>,
 }
 
-impl<C: ParserCallback> Parser<'_, C> {
+impl<C: ParserCallback, I: StringInterner> Parser<'_, C, I> {
     fn on_error(&mut self, message: &dyn Display, source: Option<Span>) {
         self.had_error = true;
         if !self.panic_mode {
@@ -220,7 +251,7 @@ impl<C: ParserCallback> Parser<'_, C> {
     }
 
     fn advance(&mut self) -> Token {
-        let token = self.tokens[self.cursor];
+        let token = self.tokens.get(self.cursor).copied().unwrap_or(Token::Eof);
         self.cursor += 1;
         token
     }
