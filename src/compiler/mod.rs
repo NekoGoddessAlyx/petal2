@@ -4,6 +4,7 @@ use std::str::from_utf8;
 use crate::compiler::code_gen::code_gen;
 use crate::compiler::lexer::{lex, Source, Span};
 use crate::compiler::parser::parse;
+use crate::compiler::sem_check::sem_check;
 use crate::prototype::Prototype;
 use crate::{PString, PStringInterner, StringInterner};
 
@@ -12,6 +13,7 @@ mod code_gen;
 mod lexer;
 mod parser;
 mod registers;
+mod sem_check;
 
 // callback
 
@@ -112,7 +114,7 @@ where
     println!("Locations: {:?}", source.locations);
     println!("Line Starts: {:?}", source.line_starts);
 
-    let parser_callback = |message: &dyn Display, at: Option<Span>| {
+    let mut callback = |message: &dyn Display, at: Option<Span>| {
         callback(CompilerMessage {
             message,
             source: &source,
@@ -121,7 +123,7 @@ where
     };
 
     let ast = match parse(
-        parser_callback,
+        |message, at| callback(message, at),
         &source.tokens,
         &source.locations,
         |bytes| strings.intern(bytes),
@@ -134,9 +136,20 @@ where
     println!("Ast: {:?}", ast);
     println!("Ast (pretty): {}", ast);
 
+    let ast = match sem_check(|message, at| callback(message, at), ast) {
+        Ok(ast) => ast,
+        Err(error) => {
+            println!("{:?}", error);
+            return Err(());
+        }
+    };
+
     match code_gen(ast, strings) {
         Ok(prototype) => Ok(prototype),
-        Err(_error) => Err(()),
+        Err(error) => {
+            println!("{:?}", error);
+            Err(())
+        }
     }
 }
 
@@ -144,13 +157,14 @@ where
 mod string {
     use std::borrow::Borrow;
     use std::fmt::{Debug, Display};
+    use std::hash::Hash;
     use std::ops::Deref;
 
     pub trait NewString<S>: FnMut(&[u8]) -> S {}
     impl<T: FnMut(&[u8]) -> S, S: CompileString> NewString<S> for T {}
 
-    pub trait CompileString: Clone + Borrow<[u8]> + AsRef<[u8]> + Deref<Target = [u8]> + Display + Debug {}
-    impl<T: Clone + Borrow<[u8]> + AsRef<[u8]> + Deref<Target = [u8]> + Display + Debug> CompileString for T {}
+    pub trait CompileString: Clone + Eq + Hash + Borrow<[u8]> + AsRef<[u8]> + Deref<Target = [u8]> + Display + Debug {}
+    impl<T: Clone + Eq + Hash + Borrow<[u8]> + AsRef<[u8]> + Deref<Target = [u8]> + Display + Debug> CompileString for T {}
 }
 
 #[rustfmt::skip]
@@ -159,6 +173,6 @@ mod callback {
 
     use crate::compiler::lexer::Span;
 
-    pub trait ParserCallback: FnMut(&dyn Display, Option<Span>) {}
-    impl<T: FnMut(&dyn Display, Option<Span>)> ParserCallback for T {}
+    pub trait Callback: FnMut(&dyn Display, Option<Span>) {}
+    impl<T: FnMut(&dyn Display, Option<Span>)> Callback for T {}
 }

@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::compiler::ast::RefLen;
 use crate::compiler::ast::{Ast, BinOp, Expr, NodeRef, Stat, UnOp};
-use crate::compiler::callback::ParserCallback;
+use crate::compiler::callback::Callback;
 use crate::compiler::lexer::{Span, Token};
 use crate::compiler::string::{CompileString, NewString};
 
@@ -23,7 +23,7 @@ pub enum StateError {
     CannotTransfer,
 }
 
-pub fn parse<C: ParserCallback, NS: NewString<S>, S: CompileString>(
+pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(
     callback: C,
     tokens: &[Token<S>],
     locations: &[Span],
@@ -72,7 +72,7 @@ enum State<S> {
 }
 
 impl<S: CompileString> State<S> {
-    fn enter<C: ParserCallback, NS: NewString<S>>(
+    fn enter<C: Callback, NS: NewString<S>>(
         &mut self,
         from: Option<State<S>>,
         parser: &mut Parser<'_, C, NS, S>,
@@ -213,7 +213,7 @@ struct Parser<'tokens, C, NS, S> {
     ast: Ast<S>,
 }
 
-impl<C: ParserCallback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
+impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     fn on_error(&mut self, message: &dyn Display, source: Option<Span>) {
         self.had_error = true;
         if !self.panic_mode {

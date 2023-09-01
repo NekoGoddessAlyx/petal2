@@ -92,7 +92,7 @@ pub enum BinOp {
     Div,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct NodeRef(pub u32);
 
 #[derive(Copy, Clone, Debug)]

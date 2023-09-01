@@ -1,4 +1,4 @@
-use crate::compiler::code_gen::Local;
+use crate::compiler::sem_check::Local;
 
 #[derive(Copy, Clone, Default, PartialEq, Debug)]
 pub struct Register(u8);

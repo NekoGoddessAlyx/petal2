@@ -1,5 +1,6 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::compiler::ast::{BinOp, NodeRef, RefLen, UnOp};
 use crate::compiler::registers::{Register, Registers};
@@ -7,19 +8,18 @@ use crate::prototype::{ConstantIndex, Instruction, Prototype};
 use crate::value::Value;
 use crate::{PString, StringInterner};
 
-type Ast = crate::compiler::ast::Ast<PString>;
+type Ast = crate::compiler::sem_check::Ast2<PString>;
 type Node = crate::compiler::ast::Node<PString>;
 type Stat = crate::compiler::ast::Stat<PString>;
 type Expr = crate::compiler::ast::Expr<PString>;
+type Binding = Rc<crate::compiler::sem_check::Binding<PString>>;
 
 #[derive(Debug)]
 pub enum CodeGenError {
     UnexpectedNode,
     BadStateTransfer,
-    NoScopeAvailable,
-    NameAlreadyInScope,
-    NameNotInScope,
-    UnboundLocal,
+    MissingBinding,
+    MissingLocalRegister,
     NoRegistersAvailable,
     ConstantPoolFull,
 }
@@ -33,8 +33,6 @@ pub fn code_gen<I: StringInterner<String = PString>>(
     let name = strings.intern(b"test");
     let current_function = PrototypeBuilder {
         name,
-        scopes: Vec::with_capacity(8),
-        num_locals: 0,
         registers: Registers::new(),
         instructions: Vec::with_capacity(64),
         constants_map: HashMap::with_capacity(32),
@@ -42,9 +40,10 @@ pub fn code_gen<I: StringInterner<String = PString>>(
     };
 
     let mut code_gen = CodeGen {
-        nodes: &ast.nodes,
-        refs: &ast.refs,
-        ref_cursor: ast.refs.len(),
+        nodes: &ast.ast.nodes,
+        refs: &ast.ast.refs,
+        ref_cursor: ast.ast.refs.len(),
+        bindings: &ast.bindings,
 
         strings,
 
@@ -53,8 +52,7 @@ pub fn code_gen<I: StringInterner<String = PString>>(
         current_function,
     };
 
-    let root_ref = ast.root();
-    let root = code_gen.get_statement(root_ref)?;
+    let root = ast.ast.root();
     code_gen.push_state(State::EnterStat(root));
 
     code_gen.visit()?;
@@ -65,8 +63,6 @@ pub fn code_gen<I: StringInterner<String = PString>>(
 
 struct PrototypeBuilder {
     name: PString,
-    scopes: Vec<Scope>,
-    num_locals: u8,
     registers: Registers,
     instructions: Vec<Instruction>,
     constants_map: HashMap<Value, ConstantIndex>,
@@ -85,9 +81,9 @@ impl PrototypeBuilder {
 }
 
 #[derive(Debug)]
-enum State<'ast> {
+enum State {
     // statements
-    EnterStat(&'ast Stat),
+    EnterStat(NodeRef),
     ExitStat,
 
     ExitCompoundStat(u16),
@@ -95,20 +91,20 @@ enum State<'ast> {
     ExitExprStat,
 
     // expressions
-    EnterExprAnywhere(&'ast Expr),
-    EnterExpr(&'ast Expr, ExprDest),
+    EnterExprAnywhere(NodeRef),
+    EnterExpr(NodeRef, ExprDest),
     ExitExpr(MaybeTempRegister),
 
     ExitUnaryExpr(UnOp, ExprDest),
-    ContinueBinaryExpr(BinOp, &'ast Expr, ExprDest),
+    ContinueBinaryExpr(BinOp, NodeRef, ExprDest),
     ExitBinaryExpr(BinOp, MaybeTempRegister, ExprDest),
 }
 
-impl<'ast> State<'ast> {
+impl State {
     fn enter<I: StringInterner<String = PString>>(
         &mut self,
         from: Option<State>,
-        code_gen: &mut CodeGen<'ast, I>,
+        code_gen: &mut CodeGen<I>,
     ) -> Result<()> {
         macro_rules! fail_transfer {
             () => {{
@@ -122,7 +118,7 @@ impl<'ast> State<'ast> {
             State::EnterStat(statement) => match from {
                 // only valid as long as this is the root
                 None | Some(State::ExitStat) | Some(State::EnterStat(..)) => {
-                    code_gen.enter_statement(statement)
+                    code_gen.enter_statement(*statement)
                 }
                 _ => fail_transfer!(),
             },
@@ -155,7 +151,7 @@ impl<'ast> State<'ast> {
                 Some(State::EnterStat(..))
                 | Some(State::EnterExprAnywhere(..))
                 | Some(State::ContinueBinaryExpr(..)) => {
-                    code_gen.enter_expression_anywhere(expression)
+                    code_gen.enter_expression_anywhere(*expression)
                 }
                 _ => fail_transfer!(),
             },
@@ -163,7 +159,7 @@ impl<'ast> State<'ast> {
                 Some(State::EnterStat(..))
                 | Some(State::EnterExpr(..))
                 | Some(State::ContinueBinaryExpr(..)) => {
-                    code_gen.enter_expression(expression, *dest)
+                    code_gen.enter_expression(*expression, *dest)
                 }
                 _ => fail_transfer!(),
             },
@@ -183,7 +179,7 @@ impl<'ast> State<'ast> {
             },
             State::ContinueBinaryExpr(op, right, dest) => match from {
                 Some(State::ExitExpr(left)) => {
-                    code_gen.continue_binary_expression(*op, left, right, *dest)
+                    code_gen.continue_binary_expression(*op, left, *right, *dest)
                 }
                 _ => fail_transfer!(),
             },
@@ -201,10 +197,11 @@ struct CodeGen<'ast, I: StringInterner<String = PString>> {
     nodes: &'ast [Node],
     refs: &'ast [NodeRef],
     ref_cursor: usize,
+    bindings: &'ast HashMap<NodeRef, Binding>,
 
     strings: I,
 
-    state: Vec<State<'ast>>,
+    state: Vec<State>,
 
     current_function: PrototypeBuilder,
 }
@@ -235,56 +232,12 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         &self.refs[start_index..end_index]
     }
 
-    fn push_state(&mut self, state: State<'ast>) {
+    fn push_state(&mut self, state: State) {
         self.state.push(state);
     }
 
-    fn pop_state(&mut self) -> Option<State<'ast>> {
+    fn pop_state(&mut self) -> Option<State> {
         self.state.pop()
-    }
-
-    fn begin_scope(&mut self) {
-        self.current_function.scopes.push(Scope::new());
-    }
-
-    fn end_scope(&mut self) -> Result<()> {
-        let scope = self
-            .current_function
-            .scopes
-            .pop()
-            .ok_or(CodeGenError::NoScopeAvailable)?;
-        self.current_function.num_locals -= scope.0.len() as u8;
-        Ok(())
-    }
-
-    fn declare(&mut self, name: PString) -> Result<Local> {
-        let scope = self
-            .current_function
-            .scopes
-            .last_mut()
-            .ok_or(CodeGenError::NoScopeAvailable)?;
-
-        match scope.0.entry(name) {
-            Entry::Occupied(_) => Err(CodeGenError::NameAlreadyInScope),
-            Entry::Vacant(entry) => {
-                let local = Local(self.current_function.num_locals);
-                entry.insert(local);
-
-                self.current_function.num_locals += 1;
-
-                Ok(local)
-            }
-        }
-    }
-
-    fn lookup(&self, name: PString) -> Option<Local> {
-        for scope in self.current_function.scopes.iter().rev() {
-            if let Some(&binding) = scope.0.get(&name) {
-                return Some(binding);
-            }
-        }
-
-        None
     }
 
     fn allocate(&mut self, dest: ExprDest) -> Result<MaybeTempRegister> {
@@ -357,23 +310,26 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
     // statements
 
-    fn enter_statement(&mut self, node: &Stat) -> Result<()> {
-        match node {
+    fn enter_statement(&mut self, node: NodeRef) -> Result<()> {
+        let statement = self.get_statement(node)?;
+        match statement {
             Stat::Compound(len) => {
-                self.begin_scope();
                 let stack_top = self.current_function.registers.stack_top();
                 self.push_state(State::ExitCompoundStat(stack_top));
 
                 let statements = self.get_refs(*len).iter().rev();
                 for statement in statements {
-                    let statement = self.get_statement(*statement)?;
-                    self.push_state(State::EnterStat(statement));
+                    self.push_state(State::EnterStat(*statement));
                 }
 
                 Ok(())
             }
-            Stat::VarDecl(name, definition) => {
-                let local = self.declare(name.clone())?;
+            Stat::VarDecl(_, definition) => {
+                let binding = self
+                    .bindings
+                    .get(&node)
+                    .ok_or(CodeGenError::MissingBinding)?;
+                let local = binding.index;
                 let register = self
                     .current_function
                     .registers
@@ -385,9 +341,11 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
                 match definition {
                     Some(definition) => {
-                        let definition = self.get_expression(*definition)?;
                         self.push_state(State::ExitVarDecl);
-                        self.push_state(State::EnterExpr(definition, ExprDest::Register(register)));
+                        self.push_state(State::EnterExpr(
+                            *definition,
+                            ExprDest::Register(register),
+                        ));
                     }
                     None => {
                         let constant = self.push_constant(Value::Integer(0))?;
@@ -401,16 +359,14 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                 Ok(())
             }
             Stat::Expr(expression) => {
-                let expression = self.get_expression(*expression)?;
                 self.push_state(State::ExitExprStat);
-                self.push_state(State::EnterExprAnywhere(expression));
+                self.push_state(State::EnterExprAnywhere(*expression));
                 Ok(())
             }
         }
     }
 
     fn exit_compound_statement(&mut self, stack_top: u16) -> Result<()> {
-        self.end_scope()?;
         self.current_function.registers.pop_to(stack_top);
         self.push_state(State::ExitStat);
         Ok(())
@@ -433,17 +389,20 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
     // expressions
 
-    fn enter_expression_anywhere(&mut self, node: &Expr) -> Result<()> {
-        match *node {
-            Expr::Var(ref var) => {
-                let local = self
-                    .lookup(var.clone())
-                    .ok_or(CodeGenError::NameNotInScope)?;
+    fn enter_expression_anywhere(&mut self, node: NodeRef) -> Result<()> {
+        let expression = self.get_expression(node)?;
+        match *expression {
+            Expr::Var(_) => {
+                let binding = self
+                    .bindings
+                    .get(&node)
+                    .ok_or(CodeGenError::MissingBinding)?;
+                let local = binding.index;
                 let local = self
                     .current_function
                     .registers
                     .address_of_local(local)
-                    .ok_or(CodeGenError::UnboundLocal)?;
+                    .ok_or(CodeGenError::MissingLocalRegister)?;
                 self.push_state(State::ExitExpr(MaybeTempRegister::Protected(local)));
                 Ok(())
             }
@@ -451,8 +410,9 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         }
     }
 
-    fn enter_expression(&mut self, node: &Expr, dest: ExprDest) -> Result<()> {
-        match *node {
+    fn enter_expression(&mut self, node: NodeRef, dest: ExprDest) -> Result<()> {
+        let expression = self.get_expression(node)?;
+        match *expression {
             Expr::Integer(v) => {
                 let dest = self.allocate(dest)?;
                 let constant = self.push_constant(Value::Integer(v))?;
@@ -473,16 +433,18 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                 self.push_state(State::ExitExpr(dest));
                 Ok(())
             }
-            Expr::Var(ref var) => {
+            Expr::Var(_) => {
                 let dest = self.allocate(dest)?;
-                let local = self
-                    .lookup(var.clone())
-                    .ok_or(CodeGenError::NameNotInScope)?;
+                let binding = self
+                    .bindings
+                    .get(&node)
+                    .ok_or(CodeGenError::MissingBinding)?;
+                let local = binding.index;
                 let local = self
                     .current_function
                     .registers
                     .address_of_local(local)
-                    .ok_or(CodeGenError::UnboundLocal)?;
+                    .ok_or(CodeGenError::MissingLocalRegister)?;
                 if local != dest.into() {
                     self.push_instruction(Instruction::Move {
                         destination: dest.into(),
@@ -494,14 +456,11 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
             }
             Expr::UnOp(op, right) => {
                 self.push_state(State::ExitUnaryExpr(op, dest));
-                let right = self.get_expression(right)?;
                 self.push_state(State::EnterExprAnywhere(right));
                 Ok(())
             }
             Expr::BinOp(op, left, right) => {
-                let right = self.get_expression(right)?;
                 self.push_state(State::ContinueBinaryExpr(op, right, dest));
-                let left = self.get_expression(left)?;
                 self.push_state(State::EnterExprAnywhere(left));
                 Ok(())
             }
@@ -531,7 +490,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         &mut self,
         op: BinOp,
         left: MaybeTempRegister,
-        right: &'ast Expr,
+        right: NodeRef,
         dest: ExprDest,
     ) -> Result<()> {
         self.push_state(State::ExitBinaryExpr(op, left, dest));
@@ -574,18 +533,6 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         self.push_instruction(instruction);
         self.push_state(State::ExitExpr(dest));
         Ok(())
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-#[repr(transparent)]
-pub struct Local(pub u8);
-
-struct Scope(HashMap<PString, Local>);
-
-impl Scope {
-    fn new() -> Self {
-        Self(HashMap::new())
     }
 }
 
