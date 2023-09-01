@@ -43,7 +43,17 @@ pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(
     };
 
     parser.push_state(State::BeginCompoundStatement);
-    parser.parse()
+    parser.parse()?;
+
+    parser.skip_nl();
+    if parser.peek() != &Token::Eof {
+        parser.on_error(&"Could not read all tokens", parser.peek_location());
+    }
+
+    match parser.had_error {
+        true => Err(ParserError::FailedParse),
+        false => Ok(parser.ast),
+    }
 }
 
 #[derive(Debug)]
@@ -278,23 +288,15 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     // parse
 
-    fn parse(mut self) -> Result<Ast<S>, ParserError> {
+    fn parse(&mut self) -> Result<(), ParserError> {
         let mut previous = None;
 
         while let Some(mut state) = self.pop_state() {
-            state.enter(previous, &mut self)?;
+            state.enter(previous, self)?;
             previous = Some(state);
         }
 
-        self.skip_nl();
-        if self.peek() != &Token::Eof {
-            self.on_error(&"Could not read all tokens", self.peek_location());
-        }
-
-        match self.had_error {
-            true => Err(ParserError::FailedParse),
-            false => Ok(self.ast),
-        }
+        Ok(())
     }
 
     // statements
