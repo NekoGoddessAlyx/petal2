@@ -28,6 +28,7 @@ impl Display for LexerErr {
 #[derive(Clone, Debug)]
 pub enum Token<S> {
     Var,
+    Return,
 
     Eq,
 
@@ -356,6 +357,9 @@ where
         match string {
             b"var" => {
                 self.push_token(Token::Var);
+            }
+            b"return" => {
+                self.push_token(Token::Return);
             }
             _ => {
                 let string = (self.new_string)(string);

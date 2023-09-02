@@ -75,6 +75,7 @@ pub enum Expr<S> {
     Integer(i64),
     Float(f64),
     Var(S),
+    Return(Option<NodeRef>),
     UnOp(UnOp, NodeRef),
     BinOp(BinOp, NodeRef, NodeRef),
 }
@@ -262,6 +263,14 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
             Expr::Integer(v) => write!(self, "{}", v)?,
             Expr::Float(v) => write!(self, "{}", v)?,
             Expr::Var(ref v) => write!(self, "{}", v)?,
+            Expr::Return(right) => {
+                write!(self, "return")?;
+                if let Some(right) = right {
+                    write!(self, " ")?;
+                    let right = self.get_expression(right)?;
+                    self.push_state(State::EnterExpr(right));
+                }
+            }
             Expr::UnOp(op, right) => {
                 match op {
                     UnOp::Neg => write!(self, "-")?,

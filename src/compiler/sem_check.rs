@@ -337,6 +337,13 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
 
                 Ok(())
             }
+            Expr::Return(right) => {
+                if let Some(right) = right {
+                    self.push_state(State::EnterExpr(*right));
+                }
+
+                Ok(())
+            }
             Expr::UnOp(_, right) => {
                 self.push_state(State::EnterExpr(*right));
 

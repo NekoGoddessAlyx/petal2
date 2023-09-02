@@ -95,6 +95,7 @@ enum State {
     EnterExpr(NodeRef, ExprDest),
     ExitExpr(MaybeTempRegister),
 
+    ExitReturnExpr(ExprDest),
     ExitUnaryExpr(UnOp, ExprDest),
     ContinueBinaryExpr(BinOp, NodeRef, ExprDest),
     ExitBinaryExpr(BinOp, MaybeTempRegister, ExprDest),
@@ -166,11 +167,16 @@ impl State {
             State::ExitExpr(..) => match from {
                 Some(State::EnterExprAnywhere(..))
                 | Some(State::EnterExpr(..))
+                | Some(State::ExitReturnExpr(..))
                 | Some(State::ExitUnaryExpr(..))
                 | Some(State::ExitBinaryExpr(..)) => Ok(()),
                 _ => fail_transfer!(),
             },
 
+            State::ExitReturnExpr(dest) => match from {
+                Some(State::ExitExpr(right)) => code_gen.exit_return_expression(right, *dest),
+                _ => fail_transfer!(),
+            },
             State::ExitUnaryExpr(op, dest) => match from {
                 Some(State::ExitExpr(register)) => {
                     code_gen.exit_unary_expression(*op, register, *dest)
@@ -406,6 +412,12 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                 self.push_state(State::ExitExpr(MaybeTempRegister::Protected(local)));
                 Ok(())
             }
+            Expr::Return(..) => {
+                // Execution can't continue after this,
+                // no need to allocate an actual new register
+                let register = Register::default();
+                self.enter_expression(node, ExprDest::Register(register))
+            }
             _ => self.enter_expression(node, ExprDest::Anywhere),
         }
     }
@@ -454,6 +466,22 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                 self.push_state(State::ExitExpr(dest));
                 Ok(())
             }
+            Expr::Return(right) => match right {
+                Some(right) => {
+                    self.push_state(State::ExitReturnExpr(dest));
+                    self.push_state(State::EnterExprAnywhere(right));
+                    Ok(())
+                }
+                None => {
+                    let right = self.allocate(ExprDest::Anywhere)?;
+                    let constant = self.push_constant(Value::Integer(0))?;
+                    self.push_instruction(Instruction::LoadConstant {
+                        destination: right.into(),
+                        constant,
+                    });
+                    self.exit_return_expression(right, dest)
+                }
+            },
             Expr::UnOp(op, right) => {
                 self.push_state(State::ExitUnaryExpr(op, dest));
                 self.push_state(State::EnterExprAnywhere(right));
@@ -465,6 +493,16 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                 Ok(())
             }
         }
+    }
+
+    fn exit_return_expression(&mut self, right: MaybeTempRegister, dest: ExprDest) -> Result<()> {
+        self.free_temp(right);
+        self.push_instruction(Instruction::Return {
+            register: right.into(),
+        });
+        let dest = self.allocate(dest)?;
+        self.push_state(State::ExitExpr(dest));
+        Ok(())
     }
 
     fn exit_unary_expression(

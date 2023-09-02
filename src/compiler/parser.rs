@@ -77,6 +77,7 @@ enum State<S> {
     EndExpression(NodeRef),
     BeginExpressionInfix(Precedence, NodeRef),
 
+    EndReturnExpression,
     EndPrefixExpression(Precedence, UnOp),
     EndBinaryExpression(Precedence, BinOp, NodeRef),
 }
@@ -180,7 +181,7 @@ impl<S: CompileString> State<S> {
                 _ => fail_transfer!(),
             },
             State::EndExpression(..) => match from {
-                Some(State::BeginExpressionInfix(..)) => Ok(()),
+                Some(State::BeginExpressionInfix(..)) | Some(State::EndReturnExpression) => Ok(()),
                 _ => fail_transfer!(),
             },
             State::BeginExpressionInfix(precedence, left) => match from {
@@ -193,6 +194,17 @@ impl<S: CompileString> State<S> {
                 _ => fail_transfer!(),
             },
 
+            State::EndReturnExpression => match from {
+                Some(State::BeginExpression(..)) => {
+                    parser.end_return_expression(None);
+                    Ok(())
+                }
+                Some(State::EndExpression(right)) => {
+                    parser.end_return_expression(Some(right));
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
             State::EndPrefixExpression(precedence, op) => match from {
                 Some(State::EndExpression(right)) => {
                     parser.end_prefix_expression(*precedence, *op, right);
@@ -396,6 +408,15 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     fn begin_expression(&mut self, precedence: Precedence) {
         self.skip_nl();
         match *self.peek() {
+            Token::Return => {
+                self.advance();
+                self.push_state(State::EndReturnExpression);
+
+                // do not peek
+                if is_expression(self.peek()) {
+                    self.push_state(State::BeginExpression(Precedence::root()));
+                }
+            }
             Token::Sub => {
                 self.advance();
                 self.push_state(State::EndPrefixExpression(precedence, UnOp::Neg));
@@ -464,6 +485,11 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         }
     }
 
+    fn end_return_expression(&mut self, right: Option<NodeRef>) {
+        let left = self.ast.push_node(Expr::Return(right));
+        self.push_state(State::EndExpression(left));
+    }
+
     fn end_prefix_expression(&mut self, precedence: Precedence, op: UnOp, right: NodeRef) {
         let left = self.ast.push_node(Expr::UnOp(op, right));
         self.push_state(State::BeginExpressionInfix(precedence, left));
@@ -510,6 +536,7 @@ fn get_precedence<S>(token: &Token<S>) -> Precedence {
         Token::Add | Token::Sub => Precedence::Additive,
         Token::Mul | Token::Div => Precedence::Multiplicative,
         Token::Var
+        | Token::Return
         | Token::Eq
         | Token::Integer(_)
         | Token::Float(_)
@@ -530,7 +557,7 @@ fn is_statement<S>(token: &Token<S>) -> bool {
 
 fn is_expression<S>(token: &Token<S>) -> bool {
     match token {
-        Token::Integer(_) | Token::Float(_) => true,
+        Token::Return | Token::Integer(_) | Token::Float(_) => true,
         _ => false,
     }
 }
