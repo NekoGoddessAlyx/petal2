@@ -106,7 +106,7 @@ struct AstPrettyPrinter<'formatter, 'ast, S> {
     nodes: &'ast [Node<S>],
     refs: &'ast [NodeRef],
     ref_cursor: usize,
-    state: Vec<State<'ast, S>>,
+    state: Vec<State>,
 }
 
 impl<S> Write for AstPrettyPrinter<'_, '_, S> {
@@ -116,10 +116,10 @@ impl<S> Write for AstPrettyPrinter<'_, '_, S> {
 }
 
 #[derive(Debug)]
-enum State<'ast, S> {
-    EnterStat(&'ast Stat<S>),
-    ExitStat(&'ast Stat<S>),
-    EnterExpr(&'ast Expr<S>),
+enum State {
+    EnterStat(NodeRef),
+    ExitStat(NodeRef),
+    EnterExpr(NodeRef),
     ContinueBinExpr(BinOp),
     EndBinExpr,
 }
@@ -185,17 +185,16 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
         &self.refs[start_index..end_index]
     }
 
-    fn push_state(&mut self, state: State<'ast, S>) {
+    fn push_state(&mut self, state: State) {
         self.state.push(state);
     }
 
-    fn pop_state(&mut self) -> Option<State<'ast, S>> {
+    fn pop_state(&mut self) -> Option<State> {
         self.state.pop()
     }
 
     fn visit(mut self) -> Result<()> {
-        let root_ref = NodeRef(self.nodes.len().saturating_sub(1) as u32);
-        let root = self.get_statement(root_ref)?;
+        let root = NodeRef(self.nodes.len().saturating_sub(1) as u32);
 
         self.push_state(State::ExitStat(root));
         self.push_state(State::EnterStat(root));
@@ -213,16 +212,16 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
         Ok(())
     }
 
-    fn enter_stat(&mut self, node: &Stat<S>) -> Result<()> {
+    fn enter_stat(&mut self, node: NodeRef) -> Result<()> {
         writeln!(self)?;
 
-        match node {
+        let statement = self.get_statement(node)?;
+        match statement {
             Stat::Compound(len) => {
                 write!(self, "{{")?;
                 self.indent();
-                let statements = self.get_refs(*len).iter().rev();
+                let statements = self.get_refs(*len).iter().copied().rev();
                 for statement in statements {
-                    let statement = self.get_statement(*statement)?;
                     self.push_state(State::ExitStat(statement));
                     self.push_state(State::EnterStat(statement));
                 }
@@ -232,21 +231,20 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
                 write!(self, "var {}", name)?;
                 if let Some(def) = def {
                     write!(self, " = ")?;
-                    let def = self.get_expression(*def)?;
-                    self.push_state(State::EnterExpr(def));
+                    self.push_state(State::EnterExpr(*def));
                 }
                 Ok(())
             }
             Stat::Expr(expr) => {
-                let expr = self.get_expression(*expr)?;
-                self.push_state(State::EnterExpr(expr));
+                self.push_state(State::EnterExpr(*expr));
                 Ok(())
             }
         }
     }
 
-    fn exit_stat(&mut self, node: &Stat<S>) -> Result<()> {
-        match node {
+    fn exit_stat(&mut self, node: NodeRef) -> Result<()> {
+        let statement = self.get_statement(node)?;
+        match statement {
             Stat::Compound(..) => {
                 self.unindent();
                 writeln!(self)?;
@@ -258,8 +256,9 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
         }
     }
 
-    fn enter_expr(&mut self, node: &Expr<S>) -> Result<()> {
-        match *node {
+    fn enter_expr(&mut self, node: NodeRef) -> Result<()> {
+        let expression = self.get_expression(node)?;
+        match *expression {
             Expr::Integer(v) => write!(self, "{}", v)?,
             Expr::Float(v) => write!(self, "{}", v)?,
             Expr::Var(ref v) => write!(self, "{}", v)?,
@@ -267,7 +266,6 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
                 write!(self, "return")?;
                 if let Some(right) = right {
                     write!(self, " ")?;
-                    let right = self.get_expression(right)?;
                     self.push_state(State::EnterExpr(right));
                 }
             }
@@ -275,16 +273,13 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
                 match op {
                     UnOp::Neg => write!(self, "-")?,
                 }
-                let right = self.get_expression(right)?;
                 self.push_state(State::EnterExpr(right));
             }
             Expr::BinOp(op, left, right) => {
                 write!(self, "(")?;
-                let right = self.get_expression(right)?;
                 self.push_state(State::EndBinExpr);
                 self.push_state(State::EnterExpr(right));
                 self.push_state(State::ContinueBinExpr(op));
-                let left = self.get_expression(left)?;
                 self.push_state(State::EnterExpr(left));
             }
         };
