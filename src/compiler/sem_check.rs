@@ -62,7 +62,7 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast<S>) -> Res
 
         nodes: &ast.nodes,
         refs: &ast.refs,
-        ref_cursor: ast.refs.len(),
+        ref_cursor: 0,
 
         state: Vec::with_capacity(32),
 
@@ -74,7 +74,7 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast<S>) -> Res
         scopes: vec![],
         num_locals: 0,
     });
-    let root = ast.root();
+    let root = NodeRef(0);
     sem_check.push_state(State::EnterStat(root));
 
     sem_check.visit()?;
@@ -93,6 +93,7 @@ enum State {
     // statements
     EnterStat(NodeRef),
     ExitStat(NodeRef),
+    ContinueCompoundStat(RefLen),
 
     // expressions
     EnterExpr(NodeRef),
@@ -117,6 +118,7 @@ impl State {
                 None
                 | Some(State::EnterStat(..))
                 | Some(State::ExitStat(..))
+                | Some(State::ContinueCompoundStat(..))
                 | Some(State::EnterExpr(..)) => sem_check.enter_statement(statement),
                 //_ => fail_transfer!(),
             },
@@ -124,6 +126,12 @@ impl State {
                 Some(State::EnterStat(..)) | Some(State::EnterExpr(..)) => {
                     sem_check.exit_statement(statement)
                 }
+                _ => fail_transfer!(),
+            },
+            State::ContinueCompoundStat(len) => match from {
+                Some(State::EnterStat(..))
+                | Some(State::ExitStat(..))
+                | Some(State::EnterExpr(..)) => sem_check.continue_compound_statement(len),
                 _ => fail_transfer!(),
             },
 
@@ -176,11 +184,10 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         }
     }
 
-    fn get_refs(&mut self, len: RefLen) -> &'ast [NodeRef] {
-        let end_index = self.ref_cursor;
-        let start_index = end_index - len.0 as usize;
-        self.ref_cursor = start_index;
-        &self.refs[start_index..end_index]
+    fn get_next_ref(&mut self) -> NodeRef {
+        let index = self.ref_cursor;
+        self.ref_cursor += 1;
+        self.refs[index]
     }
 
     fn push_state(&mut self, state: State) {
@@ -274,14 +281,10 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         let statement = self.get_statement(node)?;
         match statement {
             Stat::Compound(len) => {
-                self.push_state(State::ExitStat(node));
-
                 self.begin_scope()?;
 
-                let statements = self.get_refs(*len).iter().copied().rev();
-                for statement in statements {
-                    self.push_state(State::EnterStat(statement));
-                }
+                self.push_state(State::ExitStat(node));
+                self.push_state(State::ContinueCompoundStat(*len));
 
                 Ok(())
             }
@@ -317,6 +320,18 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
             }
             Stat::Expr(_) => Ok(()),
         }
+    }
+
+    fn continue_compound_statement(&mut self, len: RefLen) -> Result<()> {
+        if len.0 > 1 {
+            let new_len = len.0 - 1;
+            self.push_state(State::ContinueCompoundStat(RefLen(new_len)));
+        }
+
+        let next_statement = self.get_next_ref();
+        self.push_state(State::EnterStat(next_statement));
+
+        Ok(())
     }
 
     // expressions

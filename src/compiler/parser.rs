@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
-use crate::compiler::ast::RefLen;
 use crate::compiler::ast::{Ast, BinOp, Expr, NodeRef, Stat, UnOp};
+use crate::compiler::ast::{Node, RefLen};
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::{Span, Token};
 use crate::compiler::string::{CompileString, NewString};
@@ -29,7 +29,6 @@ pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(
     locations: &[Span],
     new_string: NS,
 ) -> Result<Ast<S>, ParserError> {
-    let len = tokens.len();
     let mut parser = Parser {
         callback,
         new_string,
@@ -39,7 +38,8 @@ pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(
         locations,
         cursor: 0,
         state: Vec::with_capacity(32),
-        ast: Ast::new(len),
+        nodes: Vec::with_capacity(tokens.len()),
+        refs: Vec::with_capacity(tokens.len() / 2),
     };
 
     parser.push_state(State::BeginCompoundStatement);
@@ -52,7 +52,10 @@ pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(
 
     match parser.had_error {
         true => Err(ParserError::FailedParse),
-        false => Ok(parser.ast),
+        false => Ok(Ast {
+            nodes: parser.nodes.into_boxed_slice(),
+            refs: parser.refs.into_boxed_slice(),
+        }),
     }
 }
 
@@ -63,8 +66,8 @@ enum State<S> {
     EndStatement(NodeRef),
 
     BeginCompoundStatement,
-    ContinueCompoundStatement(RefLen),
-    EndCompoundStatement(RefLen),
+    ContinueCompoundStatement(NodeRef),
+    EndCompoundStatement(NodeRef),
 
     BeginVariableDeclaration,
     EndVariableDeclaration(S),
@@ -106,9 +109,9 @@ impl<S: CompileString> State<S> {
                 _ => fail_transfer!(),
             },
             State::EndStatement(..) => match from {
-                Some(State::EndVariableDeclaration(..)) | Some(State::EndExpressionStatement) => {
-                    Ok(())
-                }
+                Some(State::EndCompoundStatement(..))
+                | Some(State::EndVariableDeclaration(..))
+                | Some(State::EndExpressionStatement) => Ok(()),
                 _ => fail_transfer!(),
             },
 
@@ -127,9 +130,9 @@ impl<S: CompileString> State<S> {
                 }
                 _ => fail_transfer!(),
             },
-            State::EndCompoundStatement(len) => match from {
+            State::EndCompoundStatement(statement) => match from {
                 Some(State::ContinueCompoundStatement(..)) => {
-                    parser.end_compound_statement(*len);
+                    parser.end_compound_statement(*statement);
                     Ok(())
                 }
                 _ => fail_transfer!(),
@@ -232,7 +235,8 @@ struct Parser<'tokens, C, NS, S> {
     locations: &'tokens [Span],
     cursor: usize,
     state: Vec<State<S>>,
-    ast: Ast<S>,
+    nodes: Vec<Node<S>>,
+    refs: Vec<NodeRef>,
 }
 
 impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
@@ -298,6 +302,22 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         self.state.pop()
     }
 
+    pub fn push_node<N: Into<Node<S>>>(&mut self, node: N) -> NodeRef {
+        let index = self.nodes.len();
+        self.nodes.push(node.into());
+        NodeRef(index as u32)
+    }
+
+    pub fn push_ref(&mut self, root: NodeRef, index: NodeRef) {
+        match self.nodes.get_mut(root.0 as usize) {
+            Some(Node::Stat(Stat::Compound(len))) => {
+                len.0 += 1;
+            }
+            _ => todo!("Unexpected node"),
+        }
+        self.refs.push(index);
+    }
+
     // parse
 
     fn parse(&mut self) -> Result<(), ParserError> {
@@ -327,12 +347,13 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     }
 
     fn begin_compound_statement(&mut self) {
-        self.push_state(State::ContinueCompoundStatement(RefLen(0)));
+        let statement = self.push_node(Stat::Compound(RefLen(0)));
+        self.push_state(State::ContinueCompoundStatement(statement));
         self.push_state(State::BeginStatement);
     }
 
-    fn continue_compound_statement(&mut self, len: RefLen, statement: NodeRef) {
-        self.ast.push_ref(statement);
+    fn continue_compound_statement(&mut self, root: NodeRef, child: NodeRef) {
+        self.push_ref(root, child);
 
         // panic recovery
         if self.panic_mode {
@@ -350,17 +371,17 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         self.skip_nl();
         match self.peek() {
             Token::Eof => {
-                self.push_state(State::EndCompoundStatement(RefLen(len.0 + 1)));
+                self.push_state(State::EndCompoundStatement(root));
             }
             _ => {
-                self.push_state(State::ContinueCompoundStatement(RefLen(len.0 + 1)));
+                self.push_state(State::ContinueCompoundStatement(root));
                 self.push_state(State::BeginStatement);
             }
         }
     }
 
-    fn end_compound_statement(&mut self, len: RefLen) {
-        let _statement = self.ast.push_node(Stat::Compound(len));
+    fn end_compound_statement(&mut self, node: NodeRef) {
+        self.push_state(State::EndStatement(node));
     }
 
     fn begin_variable_declaration(&mut self) {
@@ -387,7 +408,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     }
 
     fn end_variable_declaration(&mut self, name: S, init: Option<NodeRef>) {
-        let statement = self.ast.push_node(Stat::VarDecl(name, init));
+        let statement = self.push_node(Stat::VarDecl(name, init));
         self.push_state(State::EndStatement(statement));
         self.end_of_statement();
     }
@@ -398,7 +419,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     }
 
     fn end_expression_statement(&mut self, expression: NodeRef) {
-        let statement = self.ast.push_node(Stat::Expr(expression));
+        let statement = self.push_node(Stat::Expr(expression));
         self.push_state(State::EndStatement(statement));
         self.end_of_statement();
     }
@@ -424,25 +445,25 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             }
             Token::Integer(v) => {
                 self.advance();
-                let left = self.ast.push_node(Expr::Integer(v));
+                let left = self.push_node(Expr::Integer(v));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
             Token::Float(v) => {
                 self.advance();
-                let left = self.ast.push_node(Expr::Float(v));
+                let left = self.push_node(Expr::Float(v));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
             Token::Identifier(ref name) => {
                 let name = name.clone();
                 self.advance();
-                let left = self.ast.push_node(Expr::Var(name));
+                let left = self.push_node(Expr::Var(name));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
             _ => {
                 self.on_error(&"Expected expression", self.peek_location());
 
                 // keep the state consistent
-                let left = self.ast.push_node(Expr::Integer(0));
+                let left = self.push_node(Expr::Integer(0));
                 self.push_state(State::BeginExpressionInfix(precedence, left));
             }
         }
@@ -486,12 +507,12 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     }
 
     fn end_return_expression(&mut self, right: Option<NodeRef>) {
-        let left = self.ast.push_node(Expr::Return(right));
+        let left = self.push_node(Expr::Return(right));
         self.push_state(State::EndExpression(left));
     }
 
     fn end_prefix_expression(&mut self, precedence: Precedence, op: UnOp, right: NodeRef) {
-        let left = self.ast.push_node(Expr::UnOp(op, right));
+        let left = self.push_node(Expr::UnOp(op, right));
         self.push_state(State::BeginExpressionInfix(precedence, left));
     }
 
@@ -502,7 +523,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         left: NodeRef,
         right: NodeRef,
     ) {
-        let left = self.ast.push_node(Expr::BinOp(op, left, right));
+        let left = self.push_node(Expr::BinOp(op, left, right));
         self.push_state(State::BeginExpressionInfix(precedence, left));
     }
 }

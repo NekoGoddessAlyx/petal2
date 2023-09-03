@@ -42,7 +42,7 @@ pub fn code_gen<I: StringInterner<String = PString>>(
     let mut code_gen = CodeGen {
         nodes: &ast.ast.nodes,
         refs: &ast.ast.refs,
-        ref_cursor: ast.ast.refs.len(),
+        ref_cursor: 0,
         bindings: &ast.bindings,
 
         strings,
@@ -52,7 +52,7 @@ pub fn code_gen<I: StringInterner<String = PString>>(
         current_function,
     };
 
-    let root = ast.ast.root();
+    let root = NodeRef(0);
     code_gen.push_state(State::EnterStat(root));
 
     code_gen.visit()?;
@@ -86,6 +86,7 @@ enum State {
     EnterStat(NodeRef),
     ExitStat,
 
+    ContinueCompoundStat(RefLen),
     ExitCompoundStat(u16),
     ExitVarDecl,
     ExitExprStat,
@@ -118,9 +119,10 @@ impl State {
             // statements
             State::EnterStat(statement) => match from {
                 // only valid as long as this is the root
-                None | Some(State::ExitStat) | Some(State::EnterStat(..)) => {
-                    code_gen.enter_statement(*statement)
-                }
+                None
+                | Some(State::ExitStat)
+                | Some(State::EnterStat(..))
+                | Some(State::ContinueCompoundStat(..)) => code_gen.enter_statement(*statement),
                 _ => fail_transfer!(),
             },
             State::ExitStat => match from {
@@ -132,6 +134,12 @@ impl State {
                 _ => fail_transfer!(),
             },
 
+            State::ContinueCompoundStat(len) => match from {
+                Some(State::EnterStat(..)) | Some(State::ExitStat) => {
+                    code_gen.continue_compound_statement(*len)
+                }
+                _ => fail_transfer!(),
+            },
             State::ExitCompoundStat(stack_top) => match from {
                 Some(State::EnterStat(..)) | Some(State::ExitStat) => {
                     code_gen.exit_compound_statement(*stack_top)
@@ -231,11 +239,10 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         }
     }
 
-    fn get_refs(&mut self, len: RefLen) -> &'ast [NodeRef] {
-        let end_index = self.ref_cursor;
-        let start_index = end_index - len.0 as usize;
-        self.ref_cursor = start_index;
-        &self.refs[start_index..end_index]
+    fn get_next_ref(&mut self) -> NodeRef {
+        let index = self.ref_cursor;
+        self.ref_cursor += 1;
+        self.refs[index]
     }
 
     fn push_state(&mut self, state: State) {
@@ -322,11 +329,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
             Stat::Compound(len) => {
                 let stack_top = self.current_function.registers.stack_top();
                 self.push_state(State::ExitCompoundStat(stack_top));
-
-                let statements = self.get_refs(*len).iter().rev();
-                for statement in statements {
-                    self.push_state(State::EnterStat(*statement));
-                }
+                self.push_state(State::ContinueCompoundStat(*len));
 
                 Ok(())
             }
@@ -362,14 +365,28 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                         self.exit_variable_declaration(MaybeTempRegister::Protected(register))?;
                     }
                 }
+
                 Ok(())
             }
             Stat::Expr(expression) => {
                 self.push_state(State::ExitExprStat);
                 self.push_state(State::EnterExprAnywhere(*expression));
+
                 Ok(())
             }
         }
+    }
+
+    fn continue_compound_statement(&mut self, len: RefLen) -> Result<()> {
+        if len.0 > 1 {
+            let new_len = len.0 - 1;
+            self.push_state(State::ContinueCompoundStat(RefLen(new_len)));
+        }
+
+        let next_statement = self.get_next_ref();
+        self.push_state(State::EnterStat(next_statement));
+
+        Ok(())
     }
 
     fn exit_compound_statement(&mut self, stack_top: u16) -> Result<()> {
@@ -410,15 +427,22 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     .address_of_local(local)
                     .ok_or(CodeGenError::MissingLocalRegister)?;
                 self.push_state(State::ExitExpr(MaybeTempRegister::Protected(local)));
+
                 Ok(())
             }
             Expr::Return(..) => {
                 // Execution can't continue after this,
                 // no need to allocate an actual new register
                 let register = Register::default();
-                self.enter_expression(node, ExprDest::Register(register))
+                self.enter_expression(node, ExprDest::Register(register))?;
+
+                Ok(())
             }
-            _ => self.enter_expression(node, ExprDest::Anywhere),
+            _ => {
+                self.enter_expression(node, ExprDest::Anywhere)?;
+
+                Ok(())
+            }
         }
     }
 
@@ -433,6 +457,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     constant,
                 });
                 self.push_state(State::ExitExpr(dest));
+
                 Ok(())
             }
             Expr::Float(v) => {
@@ -443,6 +468,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     constant,
                 });
                 self.push_state(State::ExitExpr(dest));
+
                 Ok(())
             }
             Expr::Var(_) => {
@@ -464,6 +490,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     });
                 }
                 self.push_state(State::ExitExpr(dest));
+
                 Ok(())
             }
             Expr::Return(right) => match right {
@@ -479,17 +506,21 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                         destination: right.into(),
                         constant,
                     });
-                    self.exit_return_expression(right, dest)
+                    self.exit_return_expression(right, dest)?;
+
+                    Ok(())
                 }
             },
             Expr::UnOp(op, right) => {
                 self.push_state(State::ExitUnaryExpr(op, dest));
                 self.push_state(State::EnterExprAnywhere(right));
+
                 Ok(())
             }
             Expr::BinOp(op, left, right) => {
                 self.push_state(State::ContinueBinaryExpr(op, right, dest));
                 self.push_state(State::EnterExprAnywhere(left));
+
                 Ok(())
             }
         }
@@ -502,6 +533,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         });
         let dest = self.allocate(dest)?;
         self.push_state(State::ExitExpr(dest));
+
         Ok(())
     }
 
@@ -521,6 +553,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         };
         self.push_instruction(instruction);
         self.push_state(State::ExitExpr(dest));
+
         Ok(())
     }
 
@@ -533,6 +566,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     ) -> Result<()> {
         self.push_state(State::ExitBinaryExpr(op, left, dest));
         self.push_state(State::EnterExprAnywhere(right));
+
         Ok(())
     }
 
@@ -570,6 +604,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         };
         self.push_instruction(instruction);
         self.push_state(State::ExitExpr(dest));
+
         Ok(())
     }
 }
