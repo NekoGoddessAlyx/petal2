@@ -4,36 +4,17 @@ use crate::pretty_formatter::PrettyFormatter;
 
 #[derive(Debug)]
 pub struct Ast<S> {
-    pub nodes: Vec<Node<S>>,
-    pub refs: Vec<NodeRef>,
-}
-
-impl<S> Ast<S> {
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            nodes: Vec::with_capacity(capacity),
-            refs: Vec::with_capacity(capacity / 2),
-        }
-    }
-
-    pub fn push_node<N: Into<Node<S>>>(&mut self, node: N) -> NodeRef {
-        let index = self.nodes.len();
-        self.nodes.push(node.into());
-        NodeRef(index as u32)
-    }
-
-    pub fn push_ref(&mut self, node_ref: NodeRef) {
-        self.refs.push(node_ref);
-    }
-
-    pub fn root(&self) -> NodeRef {
-        NodeRef(self.nodes.len().saturating_sub(1) as u32)
-    }
+    pub nodes: Box<[Node<S>]>,
+    pub refs: Box<[NodeRef]>,
 }
 
 impl<S: Display> Display for Ast<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let pretty_printer = AstPrettyPrinter::new(self, f);
+        let mut pretty_printer = AstPrettyPrinter::new(self, f);
+
+        let root = NodeRef(0);
+        pretty_printer.push_state(State::EnterStat(root));
+
         match pretty_printer.visit() {
             Ok(_) => Ok(()),
             Err(PrinterErr::UnexpectedNode) => {
@@ -118,7 +99,7 @@ impl<S> Write for AstPrettyPrinter<'_, '_, S> {
 #[derive(Debug)]
 enum State {
     EnterStat(NodeRef),
-    ExitStat(NodeRef),
+    ContinueCompoundStat(RefLen),
     EnterExpr(NodeRef),
     ContinueBinExpr(BinOp),
     EndBinExpr,
@@ -145,7 +126,7 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
             f: PrettyFormatter::new(f),
             nodes: &ast.nodes,
             refs: &ast.refs,
-            ref_cursor: ast.refs.len(),
+            ref_cursor: 0,
             state: Vec::with_capacity(32),
         }
     }
@@ -178,11 +159,10 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
         }
     }
 
-    fn get_refs(&mut self, len: RefLen) -> &'ast [NodeRef] {
-        let end_index = self.ref_cursor;
-        let start_index = end_index - len.0 as usize;
-        self.ref_cursor = start_index;
-        &self.refs[start_index..end_index]
+    fn get_next_ref(&mut self) -> NodeRef {
+        let index = self.ref_cursor;
+        self.ref_cursor += 1;
+        self.refs[index]
     }
 
     fn push_state(&mut self, state: State) {
@@ -194,15 +174,10 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
     }
 
     fn visit(mut self) -> Result<()> {
-        let root = NodeRef(self.nodes.len().saturating_sub(1) as u32);
-
-        self.push_state(State::ExitStat(root));
-        self.push_state(State::EnterStat(root));
-
         while let Some(state) = self.pop_state() {
             match state {
                 State::EnterStat(node) => self.enter_stat(node)?,
-                State::ExitStat(node) => self.exit_stat(node)?,
+                State::ContinueCompoundStat(len) => self.continue_compound_stat(len)?,
                 State::EnterExpr(node) => self.enter_expr(node)?,
                 State::ContinueBinExpr(op) => self.continue_bin_expr(op)?,
                 State::EndBinExpr => self.end_bin_expr()?,
@@ -220,12 +195,7 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
             Stat::Compound(len) => {
                 write!(self, "{{")?;
                 self.indent();
-                let statements = self.get_refs(*len).iter().copied().rev();
-                for statement in statements {
-                    self.push_state(State::ExitStat(statement));
-                    self.push_state(State::EnterStat(statement));
-                }
-                Ok(())
+                self.push_state(State::ContinueCompoundStat(*len));
             }
             Stat::VarDecl(name, def) => {
                 write!(self, "var {}", name)?;
@@ -233,27 +203,31 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
                     write!(self, " = ")?;
                     self.push_state(State::EnterExpr(*def));
                 }
-                Ok(())
             }
             Stat::Expr(expr) => {
                 self.push_state(State::EnterExpr(*expr));
-                Ok(())
             }
-        }
+        };
+
+        Ok(())
     }
 
-    fn exit_stat(&mut self, node: NodeRef) -> Result<()> {
-        let statement = self.get_statement(node)?;
-        match statement {
-            Stat::Compound(..) => {
+    fn continue_compound_stat(&mut self, len: RefLen) -> Result<()> {
+        match len.0 {
+            0 => {
                 self.unindent();
                 writeln!(self)?;
                 write!(self, "}}")?;
-                Ok(())
             }
-            Stat::VarDecl(..) => Ok(()),
-            Stat::Expr(..) => Ok(()),
-        }
+            _ => {
+                let new_len = len.0 - 1;
+                self.push_state(State::ContinueCompoundStat(RefLen(new_len)));
+                let next_statement = self.get_next_ref();
+                self.push_state(State::EnterStat(next_statement));
+            }
+        };
+
+        Ok(())
     }
 
     fn enter_expr(&mut self, node: NodeRef) -> Result<()> {
@@ -283,6 +257,7 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
                 self.push_state(State::EnterExpr(left));
             }
         };
+
         Ok(())
     }
 
@@ -293,11 +268,13 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
             BinOp::Mul => write!(self, " * ")?,
             BinOp::Div => write!(self, " / ")?,
         };
+
         Ok(())
     }
 
     fn end_bin_expr(&mut self) -> Result<()> {
         write!(self, ")")?;
+
         Ok(())
     }
 }
