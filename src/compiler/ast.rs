@@ -1,11 +1,13 @@
 use std::fmt::{Display, Error, Formatter, Write};
 
+use crate::compiler::lexer::Span;
 use crate::pretty_formatter::PrettyFormatter;
 
 #[derive(Debug)]
 pub struct Ast<S> {
     pub nodes: Box<[Node<S>]>,
     pub refs: Box<[NodeRef]>,
+    pub locations: Box<[Span]>,
 }
 
 impl<S: Display> Display for Ast<S> {

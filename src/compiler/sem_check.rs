@@ -70,6 +70,7 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast<S>) -> Res
         nodes: &ast.nodes,
         refs: &ast.refs,
         ref_cursor: 0,
+        locations: &ast.locations,
 
         state: Vec::with_capacity(32),
 
@@ -160,6 +161,7 @@ struct SemCheck<'ast, C, S> {
     nodes: &'ast [Node<S>],
     refs: &'ast [NodeRef],
     ref_cursor: usize,
+    locations: &'ast [Span],
 
     state: Vec<State>,
 
@@ -195,6 +197,10 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         let index = self.ref_cursor;
         self.ref_cursor += 1;
         self.refs[index]
+    }
+
+    fn get_location(&self, index: NodeRef) -> Span {
+        self.locations[index.0 as usize]
     }
 
     fn push_state(&mut self, state: State) {
@@ -242,7 +248,10 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         match scope.0.entry(name.clone()) {
             Entry::Occupied(entry) => {
                 let binding = entry.get().clone();
-                self.on_error(&SemCheckMsg::VariableAlreadyDeclared(name), None);
+                self.on_error(
+                    &SemCheckMsg::VariableAlreadyDeclared(name),
+                    Some(self.get_location(node)),
+                );
                 Ok(binding)
             }
             Entry::Vacant(entry) => {
@@ -360,7 +369,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                             Mutability::Immutable if assignment.is_some() => {
                                 self.on_error(
                                     &SemCheckMsg::CannotAssignToVal(binding.name.clone()),
-                                    None,
+                                    Some(self.get_location(node)),
                                 );
                             }
                             _ => {}
@@ -369,7 +378,10 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                         self.bindings.insert(node, binding);
                     }
                     None => {
-                        self.on_error(&SemCheckMsg::VariableNotFound(var.clone()), None);
+                        self.on_error(
+                            &SemCheckMsg::VariableNotFound(var.clone()),
+                            Some(self.get_location(node)),
+                        );
                     }
                 };
 

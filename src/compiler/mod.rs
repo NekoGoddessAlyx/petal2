@@ -133,7 +133,9 @@ where
             return Err(());
         }
     };
-    println!("Ast: {:?}", ast);
+    println!("Nodes: {:?}", ast.nodes);
+    println!("Refs: {:?}", ast.refs);
+    println!("Locations: {:?}", ast.locations);
     println!("Ast (pretty): {}", ast);
 
     let ast = match sem_check(|message, at| callback(message, at), ast) {
