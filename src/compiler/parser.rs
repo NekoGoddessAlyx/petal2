@@ -80,7 +80,8 @@ enum State<S> {
     EndExpression(NodeRef),
     BeginExpressionInfix(Precedence, NodeRef),
 
-    EndReturnExpression,
+    EndVarExpression(Precedence, S),
+    EndReturnExpression(Precedence),
     EndPrefixExpression(Precedence, UnOp),
     EndBinaryExpression(Precedence, BinOp, NodeRef),
 }
@@ -184,11 +185,15 @@ impl<S: CompileString> State<S> {
                 _ => fail_transfer!(),
             },
             State::EndExpression(..) => match from {
-                Some(State::BeginExpressionInfix(..)) | Some(State::EndReturnExpression) => Ok(()),
+                Some(State::BeginExpressionInfix(..)) | Some(State::EndReturnExpression(..)) => {
+                    Ok(())
+                }
                 _ => fail_transfer!(),
             },
             State::BeginExpressionInfix(precedence, left) => match from {
                 Some(State::BeginExpression(..))
+                | Some(State::EndVarExpression(..))
+                | Some(State::EndReturnExpression(..))
                 | Some(State::EndPrefixExpression(..))
                 | Some(State::EndBinaryExpression(..)) => {
                     parser.begin_expression_infix(*precedence, *left);
@@ -197,13 +202,24 @@ impl<S: CompileString> State<S> {
                 _ => fail_transfer!(),
             },
 
-            State::EndReturnExpression => match from {
+            State::EndVarExpression(precedence, name) => match from {
                 Some(State::BeginExpression(..)) => {
-                    parser.end_return_expression(None);
+                    parser.end_variable_expression(*precedence, name.clone(), None);
+                    Ok(())
+                }
+                Some(State::EndExpression(assignment)) => {
+                    parser.end_variable_expression(*precedence, name.clone(), Some(assignment));
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+            State::EndReturnExpression(precedence) => match from {
+                Some(State::BeginExpression(..)) => {
+                    parser.end_return_expression(*precedence, None);
                     Ok(())
                 }
                 Some(State::EndExpression(right)) => {
-                    parser.end_return_expression(Some(right));
+                    parser.end_return_expression(*precedence, Some(right));
                     Ok(())
                 }
                 _ => fail_transfer!(),
@@ -431,7 +447,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         match *self.peek() {
             Token::Return => {
                 self.advance();
-                self.push_state(State::EndReturnExpression);
+                self.push_state(State::EndReturnExpression(precedence));
 
                 // do not peek
                 if is_expression(self.peek()) {
@@ -456,8 +472,13 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             Token::Identifier(ref name) => {
                 let name = name.clone();
                 self.advance();
-                let left = self.push_node(Expr::Var(name));
-                self.push_state(State::BeginExpressionInfix(precedence, left));
+
+                self.push_state(State::EndVarExpression(precedence, name));
+
+                if let Token::Eq = self.peek() {
+                    self.advance();
+                    self.push_state(State::BeginExpression(Precedence::root()));
+                }
             }
             _ => {
                 self.on_error(&"Expected expression", self.peek_location());
@@ -506,9 +527,14 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         }
     }
 
-    fn end_return_expression(&mut self, right: Option<NodeRef>) {
+    fn end_variable_expression(&mut self, precedence: Precedence, name: S, right: Option<NodeRef>) {
+        let left = self.push_node(Expr::Var(name, right));
+        self.push_state(State::BeginExpressionInfix(precedence, left));
+    }
+
+    fn end_return_expression(&mut self, precedence: Precedence, right: Option<NodeRef>) {
         let left = self.push_node(Expr::Return(right));
-        self.push_state(State::EndExpression(left));
+        self.push_state(State::BeginExpressionInfix(precedence, left));
     }
 
     fn end_prefix_expression(&mut self, precedence: Precedence, op: UnOp, right: NodeRef) {

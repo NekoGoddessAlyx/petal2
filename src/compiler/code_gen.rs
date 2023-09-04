@@ -96,6 +96,7 @@ enum State {
     EnterExpr(NodeRef, ExprDest),
     ExitExpr(RegisterOrConstant16),
 
+    ExitVariableExpr(Register, ExprDest),
     ExitReturnExpr(ExprDest),
     ExitUnaryExpr(UnOp, ExprDest),
     ContinueBinaryExpr(BinOp, NodeRef, ExprDest),
@@ -166,6 +167,7 @@ impl State {
             },
             State::EnterExpr(expression, dest) => match from {
                 Some(State::EnterStat(..))
+                | Some(State::EnterExprAnywhere(..))
                 | Some(State::EnterExpr(..))
                 | Some(State::ContinueBinaryExpr(..)) => {
                     code_gen.enter_expression(*expression, *dest)
@@ -181,6 +183,10 @@ impl State {
                 _ => fail_transfer!(),
             },
 
+            State::ExitVariableExpr(local, dest) => match from {
+                Some(State::ExitExpr(..)) => code_gen.exit_variable_expression(*local, *dest),
+                _ => fail_transfer!(),
+            },
             State::ExitReturnExpr(dest) => match from {
                 Some(State::ExitExpr(right)) => code_gen.exit_return_expression(right, *dest),
                 _ => fail_transfer!(),
@@ -444,7 +450,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
                 Ok(())
             }
-            Expr::Var(_) => {
+            Expr::Var(_, assignment) => {
                 let binding = self
                     .bindings
                     .get(&node)
@@ -455,8 +461,14 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     .registers
                     .address_of_local(local)
                     .ok_or(CodeGenError::MissingLocalRegister)?;
-                self.push_state(State::ExitExpr(RegisterOrConstant16::Protected(local)));
-
+                match assignment {
+                    None => {
+                        self.push_state(State::ExitExpr(RegisterOrConstant16::Protected(local)));
+                    }
+                    Some(assignment) => {
+                        self.push_state(State::EnterExpr(assignment, ExprDest::Register(local)));
+                    }
+                }
                 Ok(())
             }
             Expr::Return(..) => {
@@ -500,8 +512,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
                 Ok(())
             }
-            Expr::Var(_) => {
-                let dest = self.allocate(dest)?;
+            Expr::Var(_, assignment) => {
                 let binding = self
                     .bindings
                     .get(&node)
@@ -512,13 +523,15 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     .registers
                     .address_of_local(local)
                     .ok_or(CodeGenError::MissingLocalRegister)?;
-                if local != dest.into() {
-                    self.push_instruction(Instruction::LoadR {
-                        destination: dest.into(),
-                        from: local.into(),
-                    });
+                match assignment {
+                    Some(assignment) => {
+                        self.push_state(State::ExitVariableExpr(local, dest));
+                        self.push_state(State::EnterExpr(assignment, ExprDest::Register(local)));
+                    }
+                    None => {
+                        self.exit_variable_expression(local, dest)?;
+                    }
                 }
-                self.push_state(State::ExitExpr(dest.into()));
 
                 Ok(())
             }
@@ -553,6 +566,19 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                 Ok(())
             }
         }
+    }
+
+    fn exit_variable_expression(&mut self, local: Register, dest: ExprDest) -> Result<()> {
+        let dest = self.allocate(dest)?;
+        if local != dest.into() {
+            self.push_instruction(Instruction::LoadR {
+                destination: dest.into(),
+                from: local.into(),
+            });
+        }
+        self.push_state(State::ExitExpr(dest.into()));
+
+        Ok(())
     }
 
     fn exit_return_expression(

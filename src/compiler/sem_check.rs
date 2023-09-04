@@ -337,7 +337,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         let expression = self.get_expression(node)?;
         match expression {
             Expr::Integer(..) | Expr::Float(..) => Ok(()),
-            Expr::Var(var) => {
+            Expr::Var(var, assignment) => {
                 match self.lookup(var.clone()) {
                     Some(binding) => {
                         self.bindings.insert(node, binding);
@@ -345,6 +345,10 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                     None => {
                         self.on_error(&SemCheckMsg::VariableNotFound(var.clone()), None);
                     }
+                };
+
+                if let Some(assignment) = assignment {
+                    self.push_state(State::EnterExpr(*assignment));
                 }
 
                 Ok(())

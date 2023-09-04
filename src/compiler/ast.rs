@@ -32,6 +32,9 @@ pub enum Node<S> {
     Expr(Expr<S>),
 }
 
+// Assume string type is sized as u64
+static_assert_size!(Node<u64>, 24);
+
 impl<S> From<Stat<S>> for Node<S> {
     fn from(value: Stat<S>) -> Self {
         Node::Stat(value)
@@ -55,7 +58,7 @@ pub enum Stat<S> {
 pub enum Expr<S> {
     Integer(i64),
     Float(f64),
-    Var(S),
+    Var(S, Option<NodeRef>),
     Return(Option<NodeRef>),
     UnOp(UnOp, NodeRef),
     BinOp(BinOp, NodeRef, NodeRef),
@@ -235,7 +238,14 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
         match *expression {
             Expr::Integer(v) => write!(self, "{}", v)?,
             Expr::Float(v) => write!(self, "{}", v)?,
-            Expr::Var(ref v) => write!(self, "{}", v)?,
+            Expr::Var(ref v, assignment) => {
+                write!(self, "{}", v)?;
+
+                if let Some(assignment) = assignment {
+                    write!(self, " = ")?;
+                    self.push_state(State::EnterExpr(assignment));
+                }
+            }
             Expr::Return(right) => {
                 write!(self, "return")?;
                 if let Some(right) = right {
