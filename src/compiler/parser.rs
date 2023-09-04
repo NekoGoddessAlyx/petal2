@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::compiler::ast::{Ast, BinOp, Expr, NodeRef, Stat, UnOp};
+use crate::compiler::ast::{Ast, BinOp, Expr, Mutability, NodeRef, Stat, UnOp};
 use crate::compiler::ast::{Node, RefLen};
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::{Span, Token};
@@ -69,8 +69,8 @@ enum State<S> {
     ContinueCompoundStatement(NodeRef),
     EndCompoundStatement(NodeRef),
 
-    BeginVariableDeclaration,
-    EndVariableDeclaration(S),
+    BeginVariableDeclaration(Mutability),
+    EndVariableDeclaration(Mutability, S),
 
     BeginExpressionStatement,
     EndExpressionStatement,
@@ -140,20 +140,20 @@ impl<S: CompileString> State<S> {
                 _ => fail_transfer!(),
             },
 
-            State::BeginVariableDeclaration => match from {
+            State::BeginVariableDeclaration(mutability) => match from {
                 Some(State::BeginStatement) => {
-                    parser.begin_variable_declaration();
+                    parser.begin_variable_declaration(*mutability);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
-            State::EndVariableDeclaration(name) => match from {
-                Some(State::BeginVariableDeclaration) => {
-                    parser.end_variable_declaration(name.clone(), None);
+            State::EndVariableDeclaration(mutability, name) => match from {
+                Some(State::BeginVariableDeclaration(..)) => {
+                    parser.end_variable_declaration(*mutability, name.clone(), None);
                     Ok(())
                 }
                 Some(State::EndExpression(expression)) => {
-                    parser.end_variable_declaration(name.clone(), Some(expression));
+                    parser.end_variable_declaration(*mutability, name.clone(), Some(expression));
                     Ok(())
                 }
                 _ => fail_transfer!(),
@@ -176,7 +176,7 @@ impl<S: CompileString> State<S> {
 
             // expressions
             State::BeginExpression(precedence) => match from {
-                Some(State::BeginVariableDeclaration)
+                Some(State::BeginVariableDeclaration(..))
                 | Some(State::BeginExpressionStatement)
                 | Some(State::BeginExpression(..))
                 | Some(State::BeginExpressionInfix(..)) => {
@@ -361,9 +361,13 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     fn begin_statement(&mut self) {
         self.skip_nl();
         match self.peek() {
+            Token::Val => {
+                self.advance();
+                self.push_state(State::BeginVariableDeclaration(Mutability::Immutable));
+            }
             Token::Var => {
                 self.advance();
-                self.push_state(State::BeginVariableDeclaration);
+                self.push_state(State::BeginVariableDeclaration(Mutability::Mutable));
             }
             _ => {
                 self.push_state(State::BeginExpressionStatement);
@@ -409,7 +413,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         self.push_state(State::EndStatement(node));
     }
 
-    fn begin_variable_declaration(&mut self) {
+    fn begin_variable_declaration(&mut self, mutability: Mutability) {
         self.skip_nl();
         let name = match self.peek() {
             Token::Identifier(name) => {
@@ -423,7 +427,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             }
         };
 
-        self.push_state(State::EndVariableDeclaration(name));
+        self.push_state(State::EndVariableDeclaration(mutability, name));
 
         // do not skip NL
         if let Token::Eq = self.peek() {
@@ -432,8 +436,8 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         }
     }
 
-    fn end_variable_declaration(&mut self, name: S, init: Option<NodeRef>) {
-        let statement = self.push_node(Stat::VarDecl(name, init));
+    fn end_variable_declaration(&mut self, mutability: Mutability, name: S, init: Option<NodeRef>) {
+        let statement = self.push_node(Stat::VarDecl(mutability, name, init));
         self.push_state(State::EndStatement(statement));
         self.end_of_statement();
     }
@@ -608,7 +612,8 @@ fn get_precedence<S>(token: &Token<S>) -> Precedence {
     match token {
         Token::Add | Token::Sub => Precedence::Additive,
         Token::Mul | Token::Div => Precedence::Multiplicative,
-        Token::Var
+        Token::Val
+        | Token::Var
         | Token::Return
         | Token::ParenOpen
         | Token::ParenClose
@@ -624,7 +629,7 @@ fn get_precedence<S>(token: &Token<S>) -> Precedence {
 
 fn is_statement<S>(token: &Token<S>) -> bool {
     match token {
-        Token::Var => true,
+        Token::Val | Token::Var => true,
         token if is_expression(token) => true,
         _ => false,
     }

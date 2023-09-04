@@ -357,7 +357,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
                 Ok(())
             }
-            Stat::VarDecl(_, definition) => {
+            Stat::VarDecl(_, _, definition) => {
                 let binding = self
                     .bindings
                     .get(&node)

@@ -33,7 +33,7 @@ pub enum Node<S> {
 }
 
 // Assume string type is sized as u64
-static_assert_size!(Node<u64>, 24);
+static_assert_size!(Node<u64>, 32);
 
 impl<S> From<Stat<S>> for Node<S> {
     fn from(value: Stat<S>) -> Self {
@@ -50,8 +50,14 @@ impl<S> From<Expr<S>> for Node<S> {
 #[derive(Debug)]
 pub enum Stat<S> {
     Compound(RefLen),
-    VarDecl(S, Option<NodeRef>),
+    VarDecl(Mutability, S, Option<NodeRef>),
     Expr(NodeRef),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum Mutability {
+    Immutable,
+    Mutable,
 }
 
 #[derive(Debug)]
@@ -200,8 +206,11 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
                 self.indent();
                 self.push_state(State::ContinueCompoundStat(*len));
             }
-            Stat::VarDecl(name, def) => {
-                write!(self, "var {}", name)?;
+            Stat::VarDecl(mutability, name, def) => {
+                match mutability {
+                    Mutability::Immutable => write!(self, "val {}", name)?,
+                    Mutability::Mutable => write!(self, "var {}", name)?,
+                };
                 if let Some(def) = def {
                     write!(self, " = ")?;
                     self.push_state(State::EnterExpr(*def));

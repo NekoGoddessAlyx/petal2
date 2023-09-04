@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
-use crate::compiler::ast::{Ast, Expr, Node, NodeRef, RefLen, Stat};
+use crate::compiler::ast::{Ast, Expr, Mutability, Node, NodeRef, RefLen, Stat};
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::Span;
 use crate::compiler::string::CompileString;
@@ -12,6 +12,8 @@ use crate::compiler::string::CompileString;
 #[derive(Debug)]
 pub enum SemCheckMsg<S> {
     VariableAlreadyDeclared(S),
+    CannotAssignToVal(S),
+
     VariableNotFound(S),
 }
 
@@ -21,6 +23,10 @@ impl<S: CompileString> Display for SemCheckMsg<S> {
             SemCheckMsg::VariableAlreadyDeclared(name) => {
                 write!(f, "Variable '{}' already declared in this scope", name)
             }
+            SemCheckMsg::CannotAssignToVal(name) => {
+                write!(f, "Cannot assign to val '{}'", name)
+            }
+
             SemCheckMsg::VariableNotFound(name) => {
                 write!(f, "Variable '{}' not found", name)
             }
@@ -45,6 +51,7 @@ pub struct Ast2<S> {
 
 #[derive(Debug)]
 pub struct Binding<S> {
+    pub mutability: Mutability,
     pub name: S,
     pub index: Local,
 }
@@ -220,7 +227,12 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         Ok(())
     }
 
-    fn declare(&mut self, node: NodeRef, name: S) -> Result<Rc<Binding<S>>> {
+    fn declare(
+        &mut self,
+        node: NodeRef,
+        mutability: Mutability,
+        name: S,
+    ) -> Result<Rc<Binding<S>>> {
         let context = self.get_context_mut()?;
         let scope = context
             .scopes
@@ -237,7 +249,11 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                 let local = Local(context.num_locals);
                 context.num_locals += 1;
 
-                let binding = Rc::new(Binding { name, index: local });
+                let binding = Rc::new(Binding {
+                    mutability,
+                    name,
+                    index: local,
+                });
 
                 entry.insert(binding.clone());
                 self.bindings.insert(node, binding.clone());
@@ -285,7 +301,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
 
                 Ok(())
             }
-            Stat::VarDecl(_, definition) => {
+            Stat::VarDecl(_, _, definition) => {
                 self.push_state(State::ExitStat(node));
 
                 if let Some(definition) = definition {
@@ -310,8 +326,8 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
 
                 Ok(())
             }
-            Stat::VarDecl(name, _) => {
-                self.declare(node, name.clone())?;
+            Stat::VarDecl(mutability, name, _) => {
+                self.declare(node, *mutability, name.clone())?;
 
                 Ok(())
             }
@@ -340,6 +356,16 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
             Expr::Var(var, assignment) => {
                 match self.lookup(var.clone()) {
                     Some(binding) => {
+                        match binding.mutability {
+                            Mutability::Immutable if assignment.is_some() => {
+                                self.on_error(
+                                    &SemCheckMsg::CannotAssignToVal(binding.name.clone()),
+                                    None,
+                                );
+                            }
+                            _ => {}
+                        }
+
                         self.bindings.insert(node, binding);
                     }
                     None => {

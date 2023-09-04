@@ -27,6 +27,7 @@ impl Display for LexerErr {
 
 #[derive(Clone, Debug)]
 pub enum Token<S> {
+    Val,
     Var,
     Return,
 
@@ -365,6 +366,9 @@ where
 
         let string = self.buffer.as_slice();
         match string {
+            b"val" => {
+                self.push_token(Token::Val);
+            }
             b"var" => {
                 self.push_token(Token::Var);
             }
