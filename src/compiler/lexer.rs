@@ -54,9 +54,8 @@ impl<S> PartialEq for Token<S> {
     }
 }
 
-// TODO: this just became more difficult to accomplish
-// worry about it later
-// static_assert_size!(Token<PString>, 16);
+// Assuming the string type is no larger than a u64
+static_assert_size!(Token<u64>, 16);
 
 #[derive(Copy, Clone, Debug)]
 pub struct Span {
