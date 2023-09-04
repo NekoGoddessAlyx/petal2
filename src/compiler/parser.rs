@@ -580,7 +580,7 @@ fn is_expression<S>(token: &Token<S>) -> bool {
     // don't care
     #[allow(clippy::match_like_matches_macro)]
     match token {
-        Token::Return | Token::Integer(_) | Token::Float(_) => true,
+        Token::Return | Token::Integer(_) | Token::Float(_) | Token::Identifier(_) => true,
         _ => false,
     }
 }
