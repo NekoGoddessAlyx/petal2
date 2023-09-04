@@ -300,12 +300,13 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
             Entry::Occupied(entry) => *entry.get(),
             Entry::Vacant(entry) => {
                 const MAX_8: usize = CIndex8::MAX as usize;
+                const MIN_16: usize = MAX_8 + 1;
                 const MAX_16: usize = CIndex16::MAX as usize;
 
                 let index = self.current_function.constants.len();
                 let index = match index {
                     0..=MAX_8 => CIndex::Constant8(index as CIndex8),
-                    0..=MAX_16 => CIndex::Constant16(index as CIndex16),
+                    MIN_16..=MAX_16 => CIndex::Constant16(index as CIndex16),
                     _ => return Err(CodeGenError::ConstantPoolFull),
                 };
                 self.current_function.constants.push(constant);
@@ -808,21 +809,21 @@ impl Instruction {
             ) => Instruction::AddRC {
                 destination: dest.into(),
                 left: l.into(),
-                right: r.into(),
+                right: r,
             },
             (
                 RegisterOrConstant8::Constant8(l),
                 RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
             ) => Instruction::AddCR {
                 destination: dest.into(),
-                left: l.into(),
+                left: l,
                 right: r.into(),
             },
             (RegisterOrConstant8::Constant8(l), RegisterOrConstant8::Constant8(r)) => {
                 Instruction::AddCC {
                     destination: dest.into(),
-                    left: l.into(),
-                    right: r.into(),
+                    left: l,
+                    right: r,
                 }
             }
         }
@@ -844,21 +845,21 @@ impl Instruction {
             ) => Instruction::SubRC {
                 destination: dest.into(),
                 left: l.into(),
-                right: r.into(),
+                right: r,
             },
             (
                 RegisterOrConstant8::Constant8(l),
                 RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
             ) => Instruction::SubCR {
                 destination: dest.into(),
-                left: l.into(),
+                left: l,
                 right: r.into(),
             },
             (RegisterOrConstant8::Constant8(l), RegisterOrConstant8::Constant8(r)) => {
                 Instruction::SubCC {
                     destination: dest.into(),
-                    left: l.into(),
-                    right: r.into(),
+                    left: l,
+                    right: r,
                 }
             }
         }
@@ -880,21 +881,21 @@ impl Instruction {
             ) => Instruction::MulRC {
                 destination: dest.into(),
                 left: l.into(),
-                right: r.into(),
+                right: r,
             },
             (
                 RegisterOrConstant8::Constant8(l),
                 RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
             ) => Instruction::MulCR {
                 destination: dest.into(),
-                left: l.into(),
+                left: l,
                 right: r.into(),
             },
             (RegisterOrConstant8::Constant8(l), RegisterOrConstant8::Constant8(r)) => {
                 Instruction::MulCC {
                     destination: dest.into(),
-                    left: l.into(),
-                    right: r.into(),
+                    left: l,
+                    right: r,
                 }
             }
         }
@@ -916,21 +917,21 @@ impl Instruction {
             ) => Instruction::MulRC {
                 destination: dest.into(),
                 left: l.into(),
-                right: r.into(),
+                right: r,
             },
             (
                 RegisterOrConstant8::Constant8(l),
                 RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
             ) => Instruction::MulCR {
                 destination: dest.into(),
-                left: l.into(),
+                left: l,
                 right: r.into(),
             },
             (RegisterOrConstant8::Constant8(l), RegisterOrConstant8::Constant8(r)) => {
                 Instruction::MulCC {
                     destination: dest.into(),
-                    left: l.into(),
-                    right: r.into(),
+                    left: l,
+                    right: r,
                 }
             }
         }
