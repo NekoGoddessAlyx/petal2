@@ -160,6 +160,7 @@ impl State {
             State::EnterExprAnywhere(expression) => match from {
                 Some(State::EnterStat(..))
                 | Some(State::EnterExprAnywhere(..))
+                | Some(State::EnterExpr(..))
                 | Some(State::ContinueBinaryExpr(..)) => {
                     code_gen.enter_expression_anywhere(*expression)
                 }
