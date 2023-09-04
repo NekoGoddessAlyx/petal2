@@ -80,6 +80,7 @@ enum State<S> {
     EndExpression(NodeRef),
     BeginExpressionInfix(Precedence, NodeRef),
 
+    EndParenExpression(Precedence),
     EndVarExpression(Precedence, S),
     EndReturnExpression(Precedence),
     EndPrefixExpression(Precedence, UnOp),
@@ -192,6 +193,7 @@ impl<S: CompileString> State<S> {
             },
             State::BeginExpressionInfix(precedence, left) => match from {
                 Some(State::BeginExpression(..))
+                | Some(State::EndParenExpression(..))
                 | Some(State::EndVarExpression(..))
                 | Some(State::EndReturnExpression(..))
                 | Some(State::EndPrefixExpression(..))
@@ -202,6 +204,13 @@ impl<S: CompileString> State<S> {
                 _ => fail_transfer!(),
             },
 
+            State::EndParenExpression(precedence) => match from {
+                Some(State::EndExpression(expression)) => {
+                    parser.end_paren_expression(*precedence, expression);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
             State::EndVarExpression(precedence, name) => match from {
                 Some(State::BeginExpression(..)) => {
                     parser.end_variable_expression(*precedence, name.clone(), None);
@@ -454,6 +463,11 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                     self.push_state(State::BeginExpression(Precedence::root()));
                 }
             }
+            Token::ParenOpen => {
+                self.advance();
+                self.push_state(State::EndParenExpression(precedence));
+                self.push_state(State::BeginExpression(Precedence::root()));
+            }
             Token::Sub => {
                 self.advance();
                 self.push_state(State::EndPrefixExpression(precedence, UnOp::Neg));
@@ -527,6 +541,18 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         }
     }
 
+    fn end_paren_expression(&mut self, precedence: Precedence, expression: NodeRef) {
+        match self.peek() {
+            Token::ParenClose => {
+                self.advance();
+            }
+            _ => {
+                self.on_error(&"Expected ')'", self.peek_location());
+            }
+        };
+        self.push_state(State::BeginExpressionInfix(precedence, expression));
+    }
+
     fn end_variable_expression(&mut self, precedence: Precedence, name: S, right: Option<NodeRef>) {
         let left = self.push_node(Expr::Var(name, right));
         self.push_state(State::BeginExpressionInfix(precedence, left));
@@ -584,6 +610,8 @@ fn get_precedence<S>(token: &Token<S>) -> Precedence {
         Token::Mul | Token::Div => Precedence::Multiplicative,
         Token::Var
         | Token::Return
+        | Token::ParenOpen
+        | Token::ParenClose
         | Token::Eq
         | Token::Integer(_)
         | Token::Float(_)
@@ -606,7 +634,11 @@ fn is_expression<S>(token: &Token<S>) -> bool {
     // don't care
     #[allow(clippy::match_like_matches_macro)]
     match token {
-        Token::Return | Token::Integer(_) | Token::Float(_) | Token::Identifier(_) => true,
+        Token::Return
+        | Token::ParenOpen
+        | Token::Integer(_)
+        | Token::Float(_)
+        | Token::Identifier(_) => true,
         _ => false,
     }
 }

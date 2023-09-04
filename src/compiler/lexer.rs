@@ -30,6 +30,9 @@ pub enum Token<S> {
     Var,
     Return,
 
+    ParenOpen,
+    ParenClose,
+
     Eq,
 
     Add,
@@ -264,6 +267,14 @@ where
         self.start_cursor();
 
         match self.peek(0) {
+            Some(b'(') => {
+                self.advance(1);
+                self.push_token(Token::ParenOpen);
+            }
+            Some(b')') => {
+                self.advance(1);
+                self.push_token(Token::ParenClose);
+            }
             Some(b'=') => {
                 self.advance(1);
                 self.push_token(Token::Eq);
