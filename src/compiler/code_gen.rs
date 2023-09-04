@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::compiler::ast::{BinOp, NodeRef, RefLen, UnOp};
 use crate::compiler::registers::{Register, Registers};
-use crate::prototype::{ConstantIndex, Instruction, Prototype};
+use crate::prototype::{CIndex16, CIndex8, Instruction, Prototype, RIndex};
 use crate::value::Value;
 use crate::{PString, StringInterner};
 
@@ -65,7 +65,7 @@ struct PrototypeBuilder {
     name: PString,
     registers: Registers,
     instructions: Vec<Instruction>,
-    constants_map: HashMap<Value, ConstantIndex>,
+    constants_map: HashMap<Value, CIndex>,
     constants: Vec<Value>,
 }
 
@@ -94,12 +94,12 @@ enum State {
     // expressions
     EnterExprAnywhere(NodeRef),
     EnterExpr(NodeRef, ExprDest),
-    ExitExpr(MaybeTempRegister),
+    ExitExpr(RegisterOrConstant16),
 
     ExitReturnExpr(ExprDest),
     ExitUnaryExpr(UnOp, ExprDest),
     ContinueBinaryExpr(BinOp, NodeRef, ExprDest),
-    ExitBinaryExpr(BinOp, MaybeTempRegister, ExprDest),
+    ExitBinaryExpr(BinOp, RegisterOrConstant16, ExprDest),
 }
 
 impl State {
@@ -265,25 +265,49 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         })
     }
 
-    fn free_temp(&mut self, register: MaybeTempRegister) {
-        if let MaybeTempRegister::Temporary(register) = register {
+    fn free_temp(&mut self, register: impl IntoTempRegister) {
+        if let Some(register) = register.into_temp_register() {
             self.current_function.registers.free(register);
         }
+    }
+
+    fn flatten_constant(
+        &mut self,
+        value: RegisterOrConstant16,
+        dest: ExprDest,
+    ) -> Result<RegisterOrConstant8> {
+        Ok(match value {
+            RegisterOrConstant16::Protected(r) => RegisterOrConstant8::Protected(r),
+            RegisterOrConstant16::Temporary(r) => RegisterOrConstant8::Temporary(r),
+            RegisterOrConstant16::Constant8(c) => RegisterOrConstant8::Constant8(c),
+            RegisterOrConstant16::Constant16(c) => {
+                let register = self.allocate(dest)?;
+                self.push_instruction(Instruction::LoadC {
+                    destination: register.into(),
+                    constant: c,
+                });
+                register.into()
+            }
+        })
     }
 
     fn push_instruction(&mut self, instruction: Instruction) {
         self.current_function.instructions.push(instruction);
     }
 
-    fn push_constant(&mut self, constant: Value) -> Result<ConstantIndex> {
+    fn push_constant(&mut self, constant: Value) -> Result<CIndex> {
         Ok(match self.current_function.constants_map.entry(constant) {
             Entry::Occupied(entry) => *entry.get(),
             Entry::Vacant(entry) => {
+                const MAX_8: usize = CIndex8::MAX as usize;
+                const MAX_16: usize = CIndex16::MAX as usize;
+
                 let index = self.current_function.constants.len();
-                if index > ConstantIndex::MAX as usize {
-                    return Err(CodeGenError::ConstantPoolFull);
-                }
-                let index = index as ConstantIndex;
+                let index = match index {
+                    0..=MAX_8 => CIndex::Constant8(index as CIndex8),
+                    0..=MAX_16 => CIndex::Constant16(index as CIndex16),
+                    _ => return Err(CodeGenError::ConstantPoolFull),
+                };
                 self.current_function.constants.push(constant);
                 entry.insert(index);
                 index
@@ -292,20 +316,12 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     }
 
     fn finish(&mut self) -> Result<()> {
-        // got ahead of myself
+        // implicit return
+        let constant = self.push_constant(Value::Integer(0))?;
+        self.push_instruction(Instruction::ReturnC {
+            constant: constant.into(),
+        });
 
-        // implicit return of... 0
-        // for meow
-        // let register = self
-        //     .registers
-        //     .allocate_any()
-        //     .ok_or(CodeGenError::NoRegistersAvailable)?;
-        // let constant = self.push_constant(Value::Integer(0))?;
-        // self.push_instruction(Instruction::LoadConstant {
-        //     destination: register.into(),
-        //     constant,
-        // });
-        self.push_instruction(Instruction::Return { register: 0 });
         Ok(())
     }
 
@@ -358,11 +374,11 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     }
                     None => {
                         let constant = self.push_constant(Value::Integer(0))?;
-                        self.push_instruction(Instruction::LoadConstant {
+                        self.push_instruction(Instruction::LoadC {
                             destination: register.into(),
-                            constant,
+                            constant: constant.into(),
                         });
-                        self.exit_variable_declaration(MaybeTempRegister::Protected(register))?;
+                        self.exit_variable_declaration(RegisterOrConstant16::Protected(register))?;
                     }
                 }
 
@@ -395,16 +411,16 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         Ok(())
     }
 
-    fn exit_variable_declaration(&mut self, register: MaybeTempRegister) -> Result<()> {
+    fn exit_variable_declaration(&mut self, register: RegisterOrConstant16) -> Result<()> {
         assert!(
-            matches!(register, MaybeTempRegister::Protected(_)),
+            matches!(register, RegisterOrConstant16::Protected(_)),
             "Register must be protected"
         );
         self.push_state(State::ExitStat);
         Ok(())
     }
 
-    fn exit_expression_statement(&mut self, register: MaybeTempRegister) -> Result<()> {
+    fn exit_expression_statement(&mut self, register: RegisterOrConstant16) -> Result<()> {
         self.free_temp(register);
         self.push_state(State::ExitStat);
         Ok(())
@@ -415,6 +431,18 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     fn enter_expression_anywhere(&mut self, node: NodeRef) -> Result<()> {
         let expression = self.get_expression(node)?;
         match *expression {
+            Expr::Integer(v) => {
+                let constant = self.push_constant(Value::Integer(v))?;
+                self.push_state(State::ExitExpr(constant.into()));
+
+                Ok(())
+            }
+            Expr::Float(v) => {
+                let constant = self.push_constant(Value::Float(v))?;
+                self.push_state(State::ExitExpr(constant.into()));
+
+                Ok(())
+            }
             Expr::Var(_) => {
                 let binding = self
                     .bindings
@@ -426,7 +454,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     .registers
                     .address_of_local(local)
                     .ok_or(CodeGenError::MissingLocalRegister)?;
-                self.push_state(State::ExitExpr(MaybeTempRegister::Protected(local)));
+                self.push_state(State::ExitExpr(RegisterOrConstant16::Protected(local)));
 
                 Ok(())
             }
@@ -452,22 +480,22 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
             Expr::Integer(v) => {
                 let dest = self.allocate(dest)?;
                 let constant = self.push_constant(Value::Integer(v))?;
-                self.push_instruction(Instruction::LoadConstant {
+                self.push_instruction(Instruction::LoadC {
                     destination: dest.into(),
-                    constant,
+                    constant: constant.into(),
                 });
-                self.push_state(State::ExitExpr(dest));
+                self.push_state(State::ExitExpr(dest.into()));
 
                 Ok(())
             }
             Expr::Float(v) => {
                 let dest = self.allocate(dest)?;
                 let constant = self.push_constant(Value::Float(v))?;
-                self.push_instruction(Instruction::LoadConstant {
+                self.push_instruction(Instruction::LoadC {
                     destination: dest.into(),
-                    constant,
+                    constant: constant.into(),
                 });
-                self.push_state(State::ExitExpr(dest));
+                self.push_state(State::ExitExpr(dest.into()));
 
                 Ok(())
             }
@@ -484,12 +512,12 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     .address_of_local(local)
                     .ok_or(CodeGenError::MissingLocalRegister)?;
                 if local != dest.into() {
-                    self.push_instruction(Instruction::Move {
+                    self.push_instruction(Instruction::LoadR {
                         destination: dest.into(),
                         from: local.into(),
                     });
                 }
-                self.push_state(State::ExitExpr(dest));
+                self.push_state(State::ExitExpr(dest.into()));
 
                 Ok(())
             }
@@ -502,11 +530,11 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                 None => {
                     let right = self.allocate(ExprDest::Anywhere)?;
                     let constant = self.push_constant(Value::Integer(0))?;
-                    self.push_instruction(Instruction::LoadConstant {
+                    self.push_instruction(Instruction::LoadC {
                         destination: right.into(),
-                        constant,
+                        constant: constant.into(),
                     });
-                    self.exit_return_expression(right, dest)?;
+                    self.exit_return_expression(right.into(), dest)?;
 
                     Ok(())
                 }
@@ -526,13 +554,15 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         }
     }
 
-    fn exit_return_expression(&mut self, right: MaybeTempRegister, dest: ExprDest) -> Result<()> {
+    fn exit_return_expression(
+        &mut self,
+        right: RegisterOrConstant16,
+        dest: ExprDest,
+    ) -> Result<()> {
         self.free_temp(right);
-        self.push_instruction(Instruction::Return {
-            register: right.into(),
-        });
+        self.push_instruction(Instruction::ret(right));
         let dest = self.allocate(dest)?;
-        self.push_state(State::ExitExpr(dest));
+        self.push_state(State::ExitExpr(dest.into()));
 
         Ok(())
     }
@@ -540,19 +570,16 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     fn exit_unary_expression(
         &mut self,
         op: UnOp,
-        from: MaybeTempRegister,
+        right: RegisterOrConstant16,
         dest: ExprDest,
     ) -> Result<()> {
-        self.free_temp(from);
+        self.free_temp(right);
         let dest = self.allocate(dest)?;
         let instruction = match op {
-            UnOp::Neg => Instruction::Neg {
-                destination: dest.into(),
-                right: from.into(),
-            },
+            UnOp::Neg => Instruction::neg(dest.into(), right),
         };
         self.push_instruction(instruction);
-        self.push_state(State::ExitExpr(dest));
+        self.push_state(State::ExitExpr(dest.into()));
 
         Ok(())
     }
@@ -560,7 +587,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     fn continue_binary_expression(
         &mut self,
         op: BinOp,
-        left: MaybeTempRegister,
+        left: RegisterOrConstant16,
         right: NodeRef,
         dest: ExprDest,
     ) -> Result<()> {
@@ -573,48 +600,98 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     fn exit_binary_expression(
         &mut self,
         op: BinOp,
-        left: MaybeTempRegister,
-        right: MaybeTempRegister,
+        left: RegisterOrConstant16,
+        right: RegisterOrConstant16,
         dest: ExprDest,
     ) -> Result<()> {
+        let left = self.flatten_constant(left, ExprDest::Anywhere)?;
+        let right = self.flatten_constant(right, ExprDest::Anywhere)?;
         self.free_temp(left);
         self.free_temp(right);
         let dest = self.allocate(dest)?;
         let instruction = match op {
-            BinOp::Add => Instruction::Add {
-                destination: dest.into(),
-                left: left.into(),
-                right: right.into(),
-            },
-            BinOp::Sub => Instruction::Sub {
-                destination: dest.into(),
-                left: left.into(),
-                right: right.into(),
-            },
-            BinOp::Mul => Instruction::Mul {
-                destination: dest.into(),
-                left: left.into(),
-                right: right.into(),
-            },
-            BinOp::Div => Instruction::Div {
-                destination: dest.into(),
-                left: left.into(),
-                right: right.into(),
-            },
+            BinOp::Add => Instruction::add(dest.into(), left, right),
+            BinOp::Sub => Instruction::sub(dest.into(), left, right),
+            BinOp::Mul => Instruction::mul(dest.into(), left, right),
+            BinOp::Div => Instruction::div(dest.into(), left, right),
         };
         self.push_instruction(instruction);
-        self.push_state(State::ExitExpr(dest));
+        self.push_state(State::ExitExpr(dest.into()));
 
         Ok(())
     }
 }
 
+trait IntoTempRegister {
+    fn into_temp_register(self) -> Option<Register>;
+}
+
 #[derive(Copy, Clone, Debug)]
-pub enum MaybeTempRegister {
+enum RegisterOrConstant16 {
+    Protected(Register),
+    Temporary(Register),
+    Constant8(CIndex8),
+    Constant16(CIndex16),
+}
+
+impl IntoTempRegister for RegisterOrConstant16 {
+    fn into_temp_register(self) -> Option<Register> {
+        match self {
+            RegisterOrConstant16::Temporary(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+enum RegisterOrConstant8 {
+    Protected(Register),
+    Temporary(Register),
+    Constant8(CIndex8),
+}
+
+impl IntoTempRegister for RegisterOrConstant8 {
+    fn into_temp_register(self) -> Option<Register> {
+        match self {
+            RegisterOrConstant8::Temporary(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+enum MaybeTempRegister {
     /// Should not be freed after use
     Protected(Register),
     /// Should be freed after use
     Temporary(Register),
+}
+
+impl IntoTempRegister for MaybeTempRegister {
+    fn into_temp_register(self) -> Option<Register> {
+        match self {
+            MaybeTempRegister::Temporary(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
+impl From<MaybeTempRegister> for RegisterOrConstant16 {
+    fn from(value: MaybeTempRegister) -> Self {
+        match value {
+            MaybeTempRegister::Protected(r) => RegisterOrConstant16::Protected(r),
+            MaybeTempRegister::Temporary(r) => RegisterOrConstant16::Temporary(r),
+        }
+    }
+}
+
+impl From<MaybeTempRegister> for RegisterOrConstant8 {
+    fn from(value: MaybeTempRegister) -> Self {
+        match value {
+            MaybeTempRegister::Protected(r) => RegisterOrConstant8::Protected(r),
+            MaybeTempRegister::Temporary(r) => RegisterOrConstant8::Temporary(r),
+        }
+    }
 }
 
 impl From<MaybeTempRegister> for Register {
@@ -625,10 +702,34 @@ impl From<MaybeTempRegister> for Register {
     }
 }
 
-impl From<MaybeTempRegister> for crate::prototype::Register {
+impl From<MaybeTempRegister> for RIndex {
     fn from(value: MaybeTempRegister) -> Self {
         match value {
             MaybeTempRegister::Protected(r) | MaybeTempRegister::Temporary(r) => r.into(),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+enum CIndex {
+    Constant8(CIndex8),
+    Constant16(CIndex16),
+}
+
+impl From<CIndex> for RegisterOrConstant16 {
+    fn from(value: CIndex) -> Self {
+        match value {
+            CIndex::Constant8(c) => RegisterOrConstant16::Constant8(c),
+            CIndex::Constant16(c) => RegisterOrConstant16::Constant16(c),
+        }
+    }
+}
+
+impl From<CIndex> for CIndex16 {
+    fn from(value: CIndex) -> Self {
+        match value {
+            CIndex::Constant8(c) => c.into(),
+            CIndex::Constant16(c) => c,
         }
     }
 }
@@ -640,4 +741,198 @@ enum ExprDest {
     Register(Register),
     /// Allocated a register anywhere
     Anywhere,
+}
+
+impl Instruction {
+    fn ret(right: RegisterOrConstant16) -> Instruction {
+        match right {
+            RegisterOrConstant16::Protected(r) | RegisterOrConstant16::Temporary(r) => {
+                Instruction::ReturnR { register: r.into() }
+            }
+            RegisterOrConstant16::Constant8(c) => Instruction::ReturnC { constant: c.into() },
+            RegisterOrConstant16::Constant16(c) => Instruction::ReturnC { constant: c },
+        }
+    }
+
+    // fn load(dest: Register, from: RegisterOrConstant16) -> Instruction {
+    //     match from {
+    //         RegisterOrConstant16::Protected(r) | RegisterOrConstant16::Temporary(r) => {
+    //             Instruction::LoadR {
+    //                 destination: dest.into(),
+    //                 from: r.into(),
+    //             }
+    //         }
+    //         RegisterOrConstant16::Constant8(c) => Instruction::LoadC {
+    //             destination: dest.into(),
+    //             constant: c.into(),
+    //         },
+    //         RegisterOrConstant16::Constant16(c) => Instruction::LoadC {
+    //             destination: dest.into(),
+    //             constant: c,
+    //         },
+    //     }
+    // }
+
+    fn neg(dest: Register, right: RegisterOrConstant16) -> Instruction {
+        match right {
+            RegisterOrConstant16::Protected(r) | RegisterOrConstant16::Temporary(r) => {
+                Instruction::NegR {
+                    destination: dest.into(),
+                    right: r.into(),
+                }
+            }
+            RegisterOrConstant16::Constant8(c) => Instruction::NegC {
+                destination: dest.into(),
+                right: c.into(),
+            },
+            RegisterOrConstant16::Constant16(c) => Instruction::NegC {
+                destination: dest.into(),
+                right: c,
+            },
+        }
+    }
+
+    fn add(dest: Register, left: RegisterOrConstant8, right: RegisterOrConstant8) -> Instruction {
+        match (left, right) {
+            (
+                RegisterOrConstant8::Protected(l) | RegisterOrConstant8::Temporary(l),
+                RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
+            ) => Instruction::AddRR {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (
+                RegisterOrConstant8::Protected(l) | RegisterOrConstant8::Temporary(l),
+                RegisterOrConstant8::Constant8(r),
+            ) => Instruction::AddRC {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (
+                RegisterOrConstant8::Constant8(l),
+                RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
+            ) => Instruction::AddCR {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (RegisterOrConstant8::Constant8(l), RegisterOrConstant8::Constant8(r)) => {
+                Instruction::AddCC {
+                    destination: dest.into(),
+                    left: l.into(),
+                    right: r.into(),
+                }
+            }
+        }
+    }
+
+    fn sub(dest: Register, left: RegisterOrConstant8, right: RegisterOrConstant8) -> Instruction {
+        match (left, right) {
+            (
+                RegisterOrConstant8::Protected(l) | RegisterOrConstant8::Temporary(l),
+                RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
+            ) => Instruction::SubRR {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (
+                RegisterOrConstant8::Protected(l) | RegisterOrConstant8::Temporary(l),
+                RegisterOrConstant8::Constant8(r),
+            ) => Instruction::SubRC {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (
+                RegisterOrConstant8::Constant8(l),
+                RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
+            ) => Instruction::SubCR {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (RegisterOrConstant8::Constant8(l), RegisterOrConstant8::Constant8(r)) => {
+                Instruction::SubCC {
+                    destination: dest.into(),
+                    left: l.into(),
+                    right: r.into(),
+                }
+            }
+        }
+    }
+
+    fn mul(dest: Register, left: RegisterOrConstant8, right: RegisterOrConstant8) -> Instruction {
+        match (left, right) {
+            (
+                RegisterOrConstant8::Protected(l) | RegisterOrConstant8::Temporary(l),
+                RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
+            ) => Instruction::MulRR {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (
+                RegisterOrConstant8::Protected(l) | RegisterOrConstant8::Temporary(l),
+                RegisterOrConstant8::Constant8(r),
+            ) => Instruction::MulRC {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (
+                RegisterOrConstant8::Constant8(l),
+                RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
+            ) => Instruction::MulCR {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (RegisterOrConstant8::Constant8(l), RegisterOrConstant8::Constant8(r)) => {
+                Instruction::MulCC {
+                    destination: dest.into(),
+                    left: l.into(),
+                    right: r.into(),
+                }
+            }
+        }
+    }
+
+    fn div(dest: Register, left: RegisterOrConstant8, right: RegisterOrConstant8) -> Instruction {
+        match (left, right) {
+            (
+                RegisterOrConstant8::Protected(l) | RegisterOrConstant8::Temporary(l),
+                RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
+            ) => Instruction::DivRR {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (
+                RegisterOrConstant8::Protected(l) | RegisterOrConstant8::Temporary(l),
+                RegisterOrConstant8::Constant8(r),
+            ) => Instruction::MulRC {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (
+                RegisterOrConstant8::Constant8(l),
+                RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
+            ) => Instruction::MulCR {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (RegisterOrConstant8::Constant8(l), RegisterOrConstant8::Constant8(r)) => {
+                Instruction::MulCC {
+                    destination: dest.into(),
+                    left: l.into(),
+                    right: r.into(),
+                }
+            }
+        }
+    }
 }

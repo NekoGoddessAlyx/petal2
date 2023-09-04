@@ -3,7 +3,7 @@ use crate::compiler::sem_check::Local;
 #[derive(Copy, Clone, Default, PartialEq, Debug)]
 pub struct Register(u8);
 
-impl From<Register> for crate::prototype::Register {
+impl From<Register> for crate::prototype::RIndex {
     fn from(value: Register) -> Self {
         value.0
     }

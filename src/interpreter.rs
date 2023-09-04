@@ -16,7 +16,7 @@ pub fn interpret(function: Prototype) -> Result<Value, InterpretResult> {
     // Could.
     assert!(instructions
         .last()
-        .is_some_and(|i| matches!(i, Instruction::Return { .. })));
+        .is_some_and(|i| matches!(i, Instruction::ReturnR { .. } | Instruction::ReturnC { .. })));
 
     let mut stack = Vec::with_capacity(256);
     let mut pc: usize = 0;
@@ -43,35 +43,101 @@ pub fn interpret(function: Prototype) -> Result<Value, InterpretResult> {
             let instruction = *instructions.get_unchecked(pc);
             pc += 1;
             match instruction {
-                Instruction::Return { register } => {
-                    return Ok(peek!(register));
-                }
-                Instruction::Move { destination, from } => mov!(destination, peek!(from)),
-                Instruction::LoadConstant {
+                Instruction::ReturnR { register } => return Ok(peek!(register)),
+                Instruction::ReturnC { constant } => return Ok(constant!(constant)),
+
+                Instruction::LoadR { destination, from } => mov!(destination, peek!(from)),
+                Instruction::LoadC {
                     destination,
                     constant,
                 } => mov!(destination, constant!(constant)),
-                Instruction::Neg { destination, right } => mov!(destination, -peek!(right)),
-                Instruction::Add {
+
+                Instruction::NegR { destination, right } => mov!(destination, -peek!(right)),
+                Instruction::NegC { destination, right } => mov!(destination, -constant!(right)),
+
+                Instruction::AddRR {
                     destination,
                     left,
                     right,
                 } => mov!(destination, peek!(left) + peek!(right)),
-                Instruction::Sub {
+                Instruction::AddRC {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, peek!(left) + constant!(right)),
+                Instruction::AddCR {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, constant!(left) + peek!(right)),
+                Instruction::AddCC {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, constant!(left) + constant!(right)),
+
+                Instruction::SubRR {
                     destination,
                     left,
                     right,
                 } => mov!(destination, peek!(left) - peek!(right)),
-                Instruction::Mul {
+                Instruction::SubRC {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, peek!(left) - constant!(right)),
+                Instruction::SubCR {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, constant!(left) - peek!(right)),
+                Instruction::SubCC {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, constant!(left) - constant!(right)),
+
+                Instruction::MulRR {
                     destination,
                     left,
                     right,
                 } => mov!(destination, peek!(left) * peek!(right)),
-                Instruction::Div {
+                Instruction::MulRC {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, peek!(left) * constant!(right)),
+                Instruction::MulCR {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, constant!(left) * peek!(right)),
+                Instruction::MulCC {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, constant!(left) * constant!(right)),
+
+                Instruction::DivRR {
                     destination,
                     left,
                     right,
                 } => mov!(destination, peek!(left) / peek!(right)),
+                Instruction::DivRC {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, peek!(left) / constant!(right)),
+                Instruction::DivCR {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, constant!(left) / peek!(right)),
+                Instruction::DivCC {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, constant!(left) / constant!(right)),
             };
         }
     }

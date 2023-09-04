@@ -9,45 +9,119 @@ pub struct Prototype {
     pub constants: Box<[Value]>,
 }
 
-pub type Register = u8;
-pub type ConstantIndex = u16;
+pub type RIndex = u8;
+pub type CIndex8 = u8;
+pub type CIndex16 = u16;
 
 #[derive(Copy, Clone, Debug)]
 pub enum Instruction {
-    Return {
-        register: Register,
+    ReturnR {
+        register: RIndex,
     },
-    Move {
-        destination: Register,
-        from: Register,
+    ReturnC {
+        constant: CIndex16,
     },
-    LoadConstant {
-        destination: Register,
-        constant: ConstantIndex,
+
+    LoadR {
+        destination: RIndex,
+        from: RIndex,
     },
-    Neg {
-        destination: Register,
-        right: Register,
+    LoadC {
+        destination: RIndex,
+        constant: CIndex16,
     },
-    Add {
-        destination: Register,
-        left: Register,
-        right: Register,
+
+    NegR {
+        destination: RIndex,
+        right: RIndex,
     },
-    Sub {
-        destination: Register,
-        left: Register,
-        right: Register,
+    NegC {
+        destination: RIndex,
+        right: CIndex16,
     },
-    Mul {
-        destination: Register,
-        left: Register,
-        right: Register,
+
+    AddRR {
+        destination: RIndex,
+        left: RIndex,
+        right: RIndex,
     },
-    Div {
-        destination: Register,
-        left: Register,
-        right: Register,
+    AddRC {
+        destination: RIndex,
+        left: RIndex,
+        right: CIndex8,
+    },
+    AddCC {
+        destination: RIndex,
+        left: CIndex8,
+        right: CIndex8,
+    },
+    AddCR {
+        destination: RIndex,
+        left: CIndex8,
+        right: RIndex,
+    },
+
+    SubRR {
+        destination: RIndex,
+        left: RIndex,
+        right: RIndex,
+    },
+    SubRC {
+        destination: RIndex,
+        left: RIndex,
+        right: CIndex8,
+    },
+    SubCC {
+        destination: RIndex,
+        left: CIndex8,
+        right: CIndex8,
+    },
+    SubCR {
+        destination: RIndex,
+        left: CIndex8,
+        right: RIndex,
+    },
+
+    MulRR {
+        destination: RIndex,
+        left: RIndex,
+        right: RIndex,
+    },
+    MulRC {
+        destination: RIndex,
+        left: RIndex,
+        right: CIndex8,
+    },
+    MulCC {
+        destination: RIndex,
+        left: CIndex8,
+        right: CIndex8,
+    },
+    MulCR {
+        destination: RIndex,
+        left: CIndex8,
+        right: RIndex,
+    },
+
+    DivRR {
+        destination: RIndex,
+        left: RIndex,
+        right: RIndex,
+    },
+    DivRC {
+        destination: RIndex,
+        left: RIndex,
+        right: CIndex8,
+    },
+    DivCC {
+        destination: RIndex,
+        left: CIndex8,
+        right: CIndex8,
+    },
+    DivCR {
+        destination: RIndex,
+        left: CIndex8,
+        right: RIndex,
     },
 }
 
