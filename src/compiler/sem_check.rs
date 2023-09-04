@@ -230,17 +230,14 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         match scope.0.entry(name.clone()) {
             Entry::Occupied(entry) => {
                 let binding = entry.get().clone();
-                self.on_error(&SemCheckMsg::VariableAlreadyDeclared(name.clone()), None);
+                self.on_error(&SemCheckMsg::VariableAlreadyDeclared(name), None);
                 Ok(binding)
             }
             Entry::Vacant(entry) => {
                 let local = Local(context.num_locals);
                 context.num_locals += 1;
 
-                let binding = Rc::new(Binding {
-                    name: name.clone(),
-                    index: local,
-                });
+                let binding = Rc::new(Binding { name, index: local });
 
                 entry.insert(binding.clone());
                 self.bindings.insert(node, binding.clone());
@@ -343,7 +340,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
             Expr::Var(var) => {
                 match self.lookup(var.clone()) {
                     Some(binding) => {
-                        self.bindings.insert(node, binding.clone());
+                        self.bindings.insert(node, binding);
                     }
                     None => {
                         self.on_error(&SemCheckMsg::VariableNotFound(var.clone()), None);
