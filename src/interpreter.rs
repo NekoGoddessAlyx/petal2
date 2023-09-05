@@ -52,6 +52,11 @@ pub fn interpret(function: Prototype) -> Result<Value, InterpretResult> {
                     constant,
                 } => mov!(destination, constant!(constant)),
 
+                Instruction::LoadI {
+                    destination,
+                    integer,
+                } => mov!(destination, Value::Integer(integer as i64)),
+
                 Instruction::NegR { destination, right } => mov!(destination, -peek!(right)),
                 Instruction::NegC { destination, right } => mov!(destination, -constant!(right)),
 

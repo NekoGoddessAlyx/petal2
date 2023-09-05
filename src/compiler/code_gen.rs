@@ -493,22 +493,50 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         match *expression {
             Expr::Integer(v) => {
                 let dest = self.allocate(dest)?;
-                let constant = self.push_constant(Value::Integer(v))?;
-                self.push_instruction(Instruction::LoadC {
-                    destination: dest.into(),
-                    constant: constant.into(),
-                });
+
+                const MIN_16: i64 = i16::MIN as i64;
+                const MAX_16: i64 = i16::MAX as i64;
+                match v {
+                    MIN_16..=MAX_16 => {
+                        self.push_instruction(Instruction::LoadI {
+                            destination: dest.into(),
+                            integer: v as i16,
+                        });
+                    }
+                    _ => {
+                        let constant = self.push_constant(Value::Integer(v))?;
+                        self.push_instruction(Instruction::LoadC {
+                            destination: dest.into(),
+                            constant: constant.into(),
+                        });
+                    }
+                }
                 self.push_state(State::ExitExpr(dest.into()));
 
                 Ok(())
             }
             Expr::Float(v) => {
                 let dest = self.allocate(dest)?;
-                let constant = self.push_constant(Value::Float(v))?;
-                self.push_instruction(Instruction::LoadC {
-                    destination: dest.into(),
-                    constant: constant.into(),
-                });
+
+                let v_as_integer = v as i64;
+                const MIN_16: i64 = i16::MIN as i64;
+                const MAX_16: i64 = i16::MAX as i64;
+                match v_as_integer {
+                    MIN_16..=MAX_16 if v_as_integer as f64 == v => {
+                        self.push_instruction(Instruction::LoadI {
+                            destination: dest.into(),
+                            integer: v as i16,
+                        });
+                    }
+                    _ => {
+                        let constant = self.push_constant(Value::Float(v))?;
+                        self.push_instruction(Instruction::LoadC {
+                            destination: dest.into(),
+                            constant: constant.into(),
+                        });
+                    }
+                }
+
                 self.push_state(State::ExitExpr(dest.into()));
 
                 Ok(())

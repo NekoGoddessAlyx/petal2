@@ -30,6 +30,10 @@ pub enum Instruction {
         destination: RIndex,
         constant: CIndex16,
     },
+    LoadI {
+        destination: RIndex,
+        integer: i16,
+    },
 
     NegR {
         destination: RIndex,
