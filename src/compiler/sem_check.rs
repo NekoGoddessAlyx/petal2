@@ -302,7 +302,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     fn enter_statement(&mut self, node: NodeRef) -> Result<()> {
         let statement = self.get_statement(node)?;
         match statement {
-            Stat::Compound(len) => {
+            Stat::Compound { len } => {
                 self.begin_scope()?;
 
                 self.push_state(State::ExitStat(node));
@@ -310,7 +310,9 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
 
                 Ok(())
             }
-            Stat::VarDecl(_, _, definition) => {
+            Stat::VarDecl {
+                def: definition, ..
+            } => {
                 self.push_state(State::ExitStat(node));
 
                 if let Some(definition) = definition {
@@ -319,8 +321,8 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
 
                 Ok(())
             }
-            Stat::Expr(expression) => {
-                self.push_state(State::EnterExpr(*expression));
+            Stat::Expr { expr } => {
+                self.push_state(State::EnterExpr(*expr));
 
                 Ok(())
             }
@@ -330,17 +332,19 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     fn exit_statement(&mut self, node: NodeRef) -> Result<()> {
         let statement = self.get_statement(node)?;
         match statement {
-            Stat::Compound(_) => {
+            Stat::Compound { .. } => {
                 self.end_scope()?;
 
                 Ok(())
             }
-            Stat::VarDecl(mutability, name, _) => {
+            Stat::VarDecl {
+                mutability, name, ..
+            } => {
                 self.declare(node, *mutability, name.clone())?;
 
                 Ok(())
             }
-            Stat::Expr(_) => Ok(()),
+            Stat::Expr { .. } => Ok(()),
         }
     }
 
@@ -362,7 +366,10 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         let expression = self.get_expression(node)?;
         match expression {
             Expr::Integer(..) | Expr::Float(..) => Ok(()),
-            Expr::Var(var, assignment) => {
+            Expr::Var {
+                name: var,
+                assignment,
+            } => {
                 match self.lookup(var.clone()) {
                     Some(binding) => {
                         match binding.mutability {
@@ -391,19 +398,19 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
 
                 Ok(())
             }
-            Expr::Return(right) => {
+            Expr::Return { right } => {
                 if let Some(right) = right {
                     self.push_state(State::EnterExpr(*right));
                 }
 
                 Ok(())
             }
-            Expr::UnOp(_, right) => {
+            Expr::UnOp { right, .. } => {
                 self.push_state(State::EnterExpr(*right));
 
                 Ok(())
             }
-            Expr::BinOp(_, left, right) => {
+            Expr::BinOp { left, right, .. } => {
                 self.push_state(State::EnterExpr(*left));
                 self.push_state(State::EnterExpr(*right));
 

@@ -350,14 +350,14 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     fn enter_statement(&mut self, node: NodeRef) -> Result<()> {
         let statement = self.get_statement(node)?;
         match statement {
-            Stat::Compound(len) => {
+            Stat::Compound { len } => {
                 let stack_top = self.current_function.registers.stack_top();
                 self.push_state(State::ExitCompoundStat(stack_top));
                 self.push_state(State::ContinueCompoundStat(*len));
 
                 Ok(())
             }
-            Stat::VarDecl(_, _, definition) => {
+            Stat::VarDecl { def, .. } => {
                 let binding = self
                     .bindings
                     .get(&node)
@@ -372,7 +372,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     .registers
                     .assign_local(local, register);
 
-                match definition {
+                match def {
                     Some(definition) => {
                         self.push_state(State::ExitVarDecl);
                         self.push_state(State::EnterExpr(
@@ -392,9 +392,9 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
                 Ok(())
             }
-            Stat::Expr(expression) => {
+            Stat::Expr { expr } => {
                 self.push_state(State::ExitExprStat);
-                self.push_state(State::EnterExprAnywhere(*expression));
+                self.push_state(State::EnterExprAnywhere(*expr));
 
                 Ok(())
             }
@@ -451,7 +451,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
                 Ok(())
             }
-            Expr::Var(_, assignment) => {
+            Expr::Var { assignment, .. } => {
                 let binding = self
                     .bindings
                     .get(&node)
@@ -472,7 +472,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                 }
                 Ok(())
             }
-            Expr::Return(..) => {
+            Expr::Return { .. } => {
                 // Execution can't continue after this,
                 // no need to allocate an actual new register
                 let register = Register::default();
@@ -513,7 +513,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
                 Ok(())
             }
-            Expr::Var(_, assignment) => {
+            Expr::Var { assignment, .. } => {
                 let binding = self
                     .bindings
                     .get(&node)
@@ -536,7 +536,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
                 Ok(())
             }
-            Expr::Return(right) => match right {
+            Expr::Return { right } => match right {
                 Some(right) => {
                     self.push_state(State::ExitReturnExpr(dest));
                     self.push_state(State::EnterExprAnywhere(right));
@@ -554,13 +554,13 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     Ok(())
                 }
             },
-            Expr::UnOp(op, right) => {
+            Expr::UnOp { op, right } => {
                 self.push_state(State::ExitUnaryExpr(op, dest));
                 self.push_state(State::EnterExprAnywhere(right));
 
                 Ok(())
             }
-            Expr::BinOp(op, left, right) => {
+            Expr::BinOp { op, left, right } => {
                 self.push_state(State::ContinueBinaryExpr(op, right, dest));
                 self.push_state(State::EnterExprAnywhere(left));
 

@@ -51,9 +51,17 @@ impl<S> From<Expr<S>> for Node<S> {
 
 #[derive(Debug)]
 pub enum Stat<S> {
-    Compound(RefLen),
-    VarDecl(Mutability, S, Option<NodeRef>),
-    Expr(NodeRef),
+    Compound {
+        len: RefLen,
+    },
+    VarDecl {
+        mutability: Mutability,
+        name: S,
+        def: Option<NodeRef>,
+    },
+    Expr {
+        expr: NodeRef,
+    },
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -66,10 +74,22 @@ pub enum Mutability {
 pub enum Expr<S> {
     Integer(i64),
     Float(f64),
-    Var(S, Option<NodeRef>),
-    Return(Option<NodeRef>),
-    UnOp(UnOp, NodeRef),
-    BinOp(BinOp, NodeRef, NodeRef),
+    Var {
+        name: S,
+        assignment: Option<NodeRef>,
+    },
+    Return {
+        right: Option<NodeRef>,
+    },
+    UnOp {
+        op: UnOp,
+        right: NodeRef,
+    },
+    BinOp {
+        op: BinOp,
+        left: NodeRef,
+        right: NodeRef,
+    },
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -203,12 +223,16 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
 
         let statement = self.get_statement(node)?;
         match statement {
-            Stat::Compound(len) => {
+            Stat::Compound { len } => {
                 write!(self, "{{")?;
                 self.indent();
                 self.push_state(State::ContinueCompoundStat(*len));
             }
-            Stat::VarDecl(mutability, name, def) => {
+            Stat::VarDecl {
+                mutability,
+                name,
+                def,
+            } => {
                 match mutability {
                     Mutability::Immutable => write!(self, "val {}", name)?,
                     Mutability::Mutable => write!(self, "var {}", name)?,
@@ -218,7 +242,7 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
                     self.push_state(State::EnterExpr(*def));
                 }
             }
-            Stat::Expr(expr) => {
+            Stat::Expr { expr } => {
                 self.push_state(State::EnterExpr(*expr));
             }
         };
@@ -249,7 +273,10 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
         match *expression {
             Expr::Integer(v) => write!(self, "{}", v)?,
             Expr::Float(v) => write!(self, "{}", v)?,
-            Expr::Var(ref v, assignment) => {
+            Expr::Var {
+                name: ref v,
+                assignment,
+            } => {
                 write!(self, "{}", v)?;
 
                 if let Some(assignment) = assignment {
@@ -257,20 +284,20 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
                     self.push_state(State::EnterExpr(assignment));
                 }
             }
-            Expr::Return(right) => {
+            Expr::Return { right } => {
                 write!(self, "return")?;
                 if let Some(right) = right {
                     write!(self, " ")?;
                     self.push_state(State::EnterExpr(right));
                 }
             }
-            Expr::UnOp(op, right) => {
+            Expr::UnOp { op, right } => {
                 match op {
                     UnOp::Neg => write!(self, "-")?,
                 }
                 self.push_state(State::EnterExpr(right));
             }
-            Expr::BinOp(op, left, right) => {
+            Expr::BinOp { op, left, right } => {
                 write!(self, "(")?;
                 self.push_state(State::EndBinExpr);
                 self.push_state(State::EnterExpr(right));
