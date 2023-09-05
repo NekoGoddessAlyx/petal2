@@ -426,7 +426,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             loop {
                 match self.peek() {
                     Token::Eof => break,
-                    token if is_statement(token) => break,
+                    token if token.is_statement() => break,
                     _ => self.advance(),
                 };
             }
@@ -515,7 +515,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 self.push_state(State::EndReturnExpression(precedence, return_span));
 
                 // do not peek
-                if is_expression(self.peek()) {
+                if self.peek().is_expression() {
                     self.push_state(State::BeginExpression(Precedence::root()));
                 }
             }
@@ -568,7 +568,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     fn begin_expression_infix(&mut self, precedence: Precedence, left: NodeRef) {
         // do *not* skip newlines
         let next_token = self.peek();
-        let next_precedence = get_precedence(next_token);
+        let next_precedence = next_token.precedence();
 
         if precedence > next_precedence {
             self.push_state(State::EndExpression(left));
@@ -713,42 +713,33 @@ impl Precedence {
     }
 }
 
-fn get_precedence<S>(token: &Token<S>) -> Precedence {
-    match token {
-        Token::Add | Token::Sub => Precedence::Additive,
-        Token::Mul | Token::Div => Precedence::Multiplicative,
-        Token::Val
-        | Token::Var
-        | Token::Return
-        | Token::ParenOpen
-        | Token::ParenClose
-        | Token::Eq
-        | Token::Integer(_)
-        | Token::Float(_)
-        | Token::Identifier(_)
-        | Token::Nl
-        | Token::Eof
-        | Token::Err(_) => Precedence::None,
+impl<S> Token<S> {
+    fn precedence(&self) -> Precedence {
+        match self {
+            Token::Add | Token::Sub => Precedence::Additive,
+            Token::Mul | Token::Div => Precedence::Multiplicative,
+            _ => Precedence::None,
+        }
     }
-}
 
-fn is_statement<S>(token: &Token<S>) -> bool {
-    match token {
-        Token::Val | Token::Var => true,
-        token if is_expression(token) => true,
-        _ => false,
+    fn is_statement(&self) -> bool {
+        match self {
+            Token::Val | Token::Var => true,
+            _ if self.is_expression() => true,
+            _ => false,
+        }
     }
-}
 
-fn is_expression<S>(token: &Token<S>) -> bool {
-    // don't care
-    #[allow(clippy::match_like_matches_macro)]
-    match token {
-        Token::Return
-        | Token::ParenOpen
-        | Token::Integer(_)
-        | Token::Float(_)
-        | Token::Identifier(_) => true,
-        _ => false,
+    fn is_expression(&self) -> bool {
+        // don't care
+        #[allow(clippy::match_like_matches_macro)]
+        match self {
+            Token::Return
+            | Token::ParenOpen
+            | Token::Integer(_)
+            | Token::Float(_)
+            | Token::Identifier(_) => true,
+            _ => false,
+        }
     }
 }
