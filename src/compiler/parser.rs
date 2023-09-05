@@ -69,38 +69,82 @@ pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(
     }
 }
 
-type StatementRoot = Option<NodeRef>;
+type StatementParent = Option<NodeRef>;
 
 #[derive(Debug)]
 enum State<S> {
     // root
     BeginStatementsRoot,
-    ContinueStatementsRoot(NodeRef),
+    ContinueStatementsRoot {
+        block: NodeRef,
+    },
 
     // statements
-    BeginStatement(StatementRoot),
+    BeginStatement {
+        parent: StatementParent,
+    },
     EndStatement,
 
-    BeginBlockStatement(StatementRoot, Span),
-    ContinueBlockStatement(NodeRef),
+    BeginBlockStatement {
+        parent: StatementParent,
+        span: Span,
+    },
+    ContinueBlockStatement {
+        block: NodeRef,
+    },
     EndBlockStatement,
 
-    BeginVariableDeclaration(StatementRoot, Span, Mutability),
-    EndVariableDeclaration(NodeRef),
+    BeginVariableDeclaration {
+        parent: StatementParent,
+        span: Span,
+        mutability: Mutability,
+    },
+    EndVariableDeclaration {
+        var_decl: NodeRef,
+    },
 
-    BeginExpressionStatement(StatementRoot),
-    EndExpressionStatement(StatementRoot),
+    BeginExpressionStatement {
+        parent: StatementParent,
+    },
+    EndExpressionStatement {
+        parent: StatementParent,
+    },
 
     // expressions
-    BeginExpression(Precedence),
-    EndExpression(NodeRef),
-    BeginExpressionInfix(Precedence, NodeRef),
+    BeginExpression {
+        precedence: Precedence,
+    },
+    EndExpression {
+        expr: NodeRef,
+    },
+    BeginExpressionInfix {
+        precedence: Precedence,
+        left: NodeRef,
+    },
 
-    EndParenExpression(Precedence),
-    EndVarExpression(Precedence, Span, S),
-    EndReturnExpression(Precedence, Span),
-    EndPrefixExpression(Precedence, Span, UnOp),
-    EndBinaryExpression(Precedence, Span, BinOp, NodeRef),
+    EndParenExpression {
+        precedence: Precedence,
+    },
+    EndVarExpression {
+        precedence: Precedence,
+        span: Span,
+        name: S,
+    },
+    EndReturnExpression {
+        precedence: Precedence,
+        span: Span,
+    },
+    EndPrefixExpression {
+        precedence: Precedence,
+        span: Span,
+        op: UnOp,
+    },
+    EndBinaryExpression {
+        precedence: Precedence,
+        span: Span,
+        op: BinOp,
+        left: NodeRef,
+    },
 }
 
 impl<S: CompileString> State<S> {
@@ -125,134 +169,141 @@ impl<S: CompileString> State<S> {
                 }
                 _ => fail_transfer!(),
             },
-            State::ContinueStatementsRoot(len) => match from {
+            State::ContinueStatementsRoot { block } => match from {
                 Some(State::EndStatement) => {
-                    parser.continue_statements_root(*len);
+                    parser.continue_statements_root(*block);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
 
             // statements
-            State::BeginStatement(root) => match from {
+            State::BeginStatement { parent } => match from {
                 Some(State::BeginStatementsRoot)
-                | Some(State::ContinueStatementsRoot(..))
-                | Some(State::BeginBlockStatement(..))
-                | Some(State::ContinueBlockStatement(..)) => {
-                    parser.begin_statement(*root);
+                | Some(State::ContinueStatementsRoot { .. })
+                | Some(State::BeginBlockStatement { .. })
+                | Some(State::ContinueBlockStatement { .. }) => {
+                    parser.begin_statement(*parent);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
             State::EndStatement => match from {
                 Some(State::EndBlockStatement)
-                | Some(State::EndVariableDeclaration(..))
-                | Some(State::EndExpressionStatement(..)) => Ok(()),
+                | Some(State::EndVariableDeclaration { .. })
+                | Some(State::EndExpressionStatement { .. }) => Ok(()),
                 _ => fail_transfer!(),
             },
 
-            State::BeginBlockStatement(root, span) => match from {
-                Some(State::BeginStatement(..)) => {
-                    parser.begin_block_statement(*root, *span);
+            State::BeginBlockStatement { parent, span } => match from {
+                Some(State::BeginStatement { .. }) => {
+                    parser.begin_block_statement(*parent, *span);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
-            State::ContinueBlockStatement(root) => match from {
+            State::ContinueBlockStatement { block } => match from {
                 Some(State::EndStatement) => {
-                    parser.continue_block_statement(*root);
+                    parser.continue_block_statement(*block);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
             State::EndBlockStatement => match from {
-                Some(State::ContinueBlockStatement(..)) => {
+                Some(State::ContinueBlockStatement { .. }) => {
                     parser.end_block_statement();
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
 
-            State::BeginVariableDeclaration(root, var_span, mutability) => match from {
-                Some(State::BeginStatement(..)) => {
-                    parser.begin_variable_declaration(*root, *var_span, *mutability);
+            State::BeginVariableDeclaration {
+                parent,
+                span,
+                mutability,
+            } => match from {
+                Some(State::BeginStatement { .. }) => {
+                    parser.begin_variable_declaration(*parent, *span, *mutability);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
-            State::EndVariableDeclaration(var_decl) => match from {
-                Some(State::BeginVariableDeclaration(..)) => {
+            State::EndVariableDeclaration { var_decl } => match from {
+                Some(State::BeginVariableDeclaration { .. }) => {
                     parser.end_variable_declaration(*var_decl, None);
                     Ok(())
                 }
-                Some(State::EndExpression(expression)) => {
-                    parser.end_variable_declaration(*var_decl, Some(expression));
+                Some(State::EndExpression { expr }) => {
+                    parser.end_variable_declaration(*var_decl, Some(expr));
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
 
-            State::BeginExpressionStatement(root) => match from {
-                Some(State::BeginStatement(..)) => {
-                    parser.begin_expression_statement(*root);
+            State::BeginExpressionStatement { parent } => match from {
+                Some(State::BeginStatement { .. }) => {
+                    parser.begin_expression_statement(*parent);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
-            State::EndExpressionStatement(root) => match from {
-                Some(State::EndExpression(expression)) => {
-                    parser.end_expression_statement(*root, expression);
+            State::EndExpressionStatement { parent } => match from {
+                Some(State::EndExpression { expr }) => {
+                    parser.end_expression_statement(*parent, expr);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
 
             // expressions
-            State::BeginExpression(precedence) => match from {
-                Some(State::BeginVariableDeclaration(..))
-                | Some(State::BeginExpressionStatement(..))
-                | Some(State::BeginExpression(..))
-                | Some(State::BeginExpressionInfix(..)) => {
+            State::BeginExpression { precedence } => match from {
+                Some(State::BeginVariableDeclaration { .. })
+                | Some(State::BeginExpressionStatement { .. })
+                | Some(State::BeginExpression { .. })
+                | Some(State::BeginExpressionInfix { .. }) => {
                     parser.begin_expression(*precedence);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
-            State::EndExpression(..) => match from {
-                Some(State::BeginExpressionInfix(..)) | Some(State::EndReturnExpression(..)) => {
-                    Ok(())
-                }
+            State::EndExpression { .. } => match from {
+                Some(State::BeginExpressionInfix { .. })
+                | Some(State::EndReturnExpression { .. }) => Ok(()),
                 _ => fail_transfer!(),
             },
-            State::BeginExpressionInfix(precedence, left) => match from {
-                Some(State::BeginExpression(..))
-                | Some(State::EndParenExpression(..))
-                | Some(State::EndVarExpression(..))
-                | Some(State::EndReturnExpression(..))
-                | Some(State::EndPrefixExpression(..))
-                | Some(State::EndBinaryExpression(..)) => {
+            State::BeginExpressionInfix { precedence, left } => match from {
+                Some(State::BeginExpression { .. })
+                | Some(State::EndParenExpression { .. })
+                | Some(State::EndVarExpression { .. })
+                | Some(State::EndReturnExpression { .. })
+                | Some(State::EndPrefixExpression { .. })
+                | Some(State::EndBinaryExpression { .. }) => {
                     parser.begin_expression_infix(*precedence, *left);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
 
-            State::EndParenExpression(precedence) => match from {
-                Some(State::EndExpression(expression)) => {
-                    parser.end_paren_expression(*precedence, expression);
+            State::EndParenExpression { precedence } => match from {
+                Some(State::EndExpression { expr }) => {
+                    parser.end_paren_expression(*precedence, expr);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
-            State::EndVarExpression(precedence, var_span, name) => match from {
-                Some(State::BeginExpression(..)) => {
-                    parser.end_variable_expression(*precedence, *var_span, name.clone(), None);
+            State::EndVarExpression {
+                precedence,
+                span,
+                name,
+            } => match from {
+                Some(State::BeginExpression { .. }) => {
+                    parser.end_variable_expression(*precedence, *span, name.clone(), None);
                     Ok(())
                 }
-                Some(State::EndExpression(assignment)) => {
+                Some(State::EndExpression { expr: assignment }) => {
                     parser.end_variable_expression(
                         *precedence,
-                        *var_span,
+                        *span,
                         name.clone(),
                         Some(assignment),
                     );
@@ -260,27 +311,36 @@ impl<S: CompileString> State<S> {
                 }
                 _ => fail_transfer!(),
             },
-            State::EndReturnExpression(precedence, return_span) => match from {
-                Some(State::BeginExpression(..)) => {
-                    parser.end_return_expression(*precedence, *return_span, None);
+            State::EndReturnExpression { precedence, span } => match from {
+                Some(State::BeginExpression { .. }) => {
+                    parser.end_return_expression(*precedence, *span, None);
                     Ok(())
                 }
-                Some(State::EndExpression(right)) => {
-                    parser.end_return_expression(*precedence, *return_span, Some(right));
-                    Ok(())
-                }
-                _ => fail_transfer!(),
-            },
-            State::EndPrefixExpression(precedence, op_span, op) => match from {
-                Some(State::EndExpression(right)) => {
-                    parser.end_prefix_expression(*precedence, *op_span, *op, right);
+                Some(State::EndExpression { expr: right }) => {
+                    parser.end_return_expression(*precedence, *span, Some(right));
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
-            State::EndBinaryExpression(precedence, op_span, op, left) => match from {
-                Some(State::EndExpression(right)) => {
-                    parser.end_binary_expression(*precedence, *op_span, *op, *left, right);
+            State::EndPrefixExpression {
+                precedence,
+                span,
+                op,
+            } => match from {
+                Some(State::EndExpression { expr: right }) => {
+                    parser.end_prefix_expression(*precedence, *span, *op, right);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+            State::EndBinaryExpression {
+                precedence,
+                span,
+                op,
+                left,
+            } => match from {
+                Some(State::EndExpression { expr: right }) => {
+                    parser.end_binary_expression(*precedence, *span, *op, *left, right);
                     Ok(())
                 }
                 _ => fail_transfer!(),
@@ -430,65 +490,69 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     fn begin_statements_root(&mut self) {
         let root = self.push_node(Stat::Compound { len: RefLen(0) }, self.peek_location());
-        self.push_state(State::ContinueStatementsRoot(root));
-        self.push_state(State::BeginStatement(Some(root)));
+        self.push_state(State::ContinueStatementsRoot { block: root });
+        self.push_state(State::BeginStatement { parent: Some(root) });
     }
 
-    fn continue_statements_root(&mut self, root: NodeRef) {
+    fn continue_statements_root(&mut self, block: NodeRef) {
         self.recover_statements();
 
         self.skip_nl();
         match self.peek() {
             Token::Eof => {}
             _ => {
-                self.push_state(State::ContinueStatementsRoot(root));
-                self.push_state(State::BeginStatement(Some(root)));
+                self.push_state(State::ContinueStatementsRoot { block });
+                self.push_state(State::BeginStatement {
+                    parent: Some(block),
+                });
             }
         }
     }
 
     // statements
 
-    fn begin_statement(&mut self, root: StatementRoot) {
+    fn begin_statement(&mut self, root: StatementParent) {
         self.skip_nl();
         match self.peek() {
             Token::BraceOpen => {
                 let span = self.peek_location();
                 self.advance();
-                self.push_state(State::BeginBlockStatement(root, span));
+                self.push_state(State::BeginBlockStatement { parent: root, span });
             }
             Token::Val => {
                 let val_span = self.peek_location();
                 self.advance();
-                self.push_state(State::BeginVariableDeclaration(
-                    root,
-                    val_span,
-                    Mutability::Immutable,
-                ));
+                self.push_state(State::BeginVariableDeclaration {
+                    parent: root,
+                    span: val_span,
+                    mutability: Mutability::Immutable,
+                });
             }
             Token::Var => {
                 let var_span = self.peek_location();
                 self.advance();
-                self.push_state(State::BeginVariableDeclaration(
-                    root,
-                    var_span,
-                    Mutability::Mutable,
-                ));
+                self.push_state(State::BeginVariableDeclaration {
+                    parent: root,
+                    span: var_span,
+                    mutability: Mutability::Mutable,
+                });
             }
             _ => {
-                self.push_state(State::BeginExpressionStatement(root));
+                self.push_state(State::BeginExpressionStatement { parent: root });
             }
         }
     }
 
-    fn begin_block_statement(&mut self, root: StatementRoot, span: Span) {
+    fn begin_block_statement(&mut self, root: StatementParent, span: Span) {
         let block = self.push_node(Stat::Compound { len: RefLen(0) }, span);
         if let Some(root) = root {
             self.push_ref_to_compound_stat(root, block);
         }
 
-        self.push_state(State::ContinueBlockStatement(block));
-        self.push_state(State::BeginStatement(Some(block)));
+        self.push_state(State::ContinueBlockStatement { block });
+        self.push_state(State::BeginStatement {
+            parent: Some(block),
+        });
     }
 
     fn continue_block_statement(&mut self, block: NodeRef) {
@@ -500,8 +564,10 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 self.push_state(State::EndBlockStatement);
             }
             _ => {
-                self.push_state(State::ContinueBlockStatement(block));
-                self.push_state(State::BeginStatement(Some(block)));
+                self.push_state(State::ContinueBlockStatement { block });
+                self.push_state(State::BeginStatement {
+                    parent: Some(block),
+                });
             }
         }
     }
@@ -521,7 +587,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     fn begin_variable_declaration(
         &mut self,
-        root: StatementRoot,
+        root: StatementParent,
         var_span: Span,
         mutability: Mutability,
     ) {
@@ -550,12 +616,16 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             self.push_ref_to_compound_stat(root, statement);
         }
 
-        self.push_state(State::EndVariableDeclaration(statement));
+        self.push_state(State::EndVariableDeclaration {
+            var_decl: statement,
+        });
 
         // do not skip NL
         if let Token::Eq = self.peek() {
             self.advance();
-            self.push_state(State::BeginExpression(Precedence::root()));
+            self.push_state(State::BeginExpression {
+                precedence: Precedence::root(),
+            });
         }
     }
 
@@ -565,12 +635,14 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         self.end_of_statement();
     }
 
-    fn begin_expression_statement(&mut self, root: StatementRoot) {
-        self.push_state(State::EndExpressionStatement(root));
-        self.push_state(State::BeginExpression(Precedence::root()));
+    fn begin_expression_statement(&mut self, root: StatementParent) {
+        self.push_state(State::EndExpressionStatement { parent: root });
+        self.push_state(State::BeginExpression {
+            precedence: Precedence::root(),
+        });
     }
 
-    fn end_expression_statement(&mut self, root: StatementRoot, expression: NodeRef) {
+    fn end_expression_statement(&mut self, root: StatementParent, expression: NodeRef) {
         let statement = self.push_node(
             Stat::Expr { expr: expression },
             self.get_node_location(expression),
@@ -591,46 +663,65 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             Token::Return => {
                 let return_span = self.peek_location();
                 self.advance();
-                self.push_state(State::EndReturnExpression(precedence, return_span));
+                self.push_state(State::EndReturnExpression {
+                    precedence,
+                    span: return_span,
+                });
 
                 // do not peek
                 if self.peek().is_expression() {
-                    self.push_state(State::BeginExpression(Precedence::root()));
+                    self.push_state(State::BeginExpression {
+                        precedence: Precedence::root(),
+                    });
                 }
             }
             Token::ParenOpen => {
                 self.advance();
-                self.push_state(State::EndParenExpression(precedence));
-                self.push_state(State::BeginExpression(Precedence::root()));
+                self.push_state(State::EndParenExpression { precedence });
+                self.push_state(State::BeginExpression {
+                    precedence: Precedence::root(),
+                });
             }
             Token::Sub => {
                 let op_span = self.peek_location();
                 self.advance();
-                self.push_state(State::EndPrefixExpression(precedence, op_span, UnOp::Neg));
-                self.push_state(State::BeginExpression(Precedence::Prefix));
+                self.push_state(State::EndPrefixExpression {
+                    precedence,
+                    span: op_span,
+                    op: UnOp::Neg,
+                });
+                self.push_state(State::BeginExpression {
+                    precedence: Precedence::Prefix,
+                });
             }
             Token::Integer(v) => {
                 let expr_span = self.peek_location();
                 self.advance();
                 let left = self.push_node(Expr::Integer(v), expr_span);
-                self.push_state(State::BeginExpressionInfix(precedence, left));
+                self.push_state(State::BeginExpressionInfix { precedence, left });
             }
             Token::Float(v) => {
                 let expr_span = self.peek_location();
                 self.advance();
                 let left = self.push_node(Expr::Float(v), expr_span);
-                self.push_state(State::BeginExpressionInfix(precedence, left));
+                self.push_state(State::BeginExpressionInfix { precedence, left });
             }
             Token::Identifier(ref name) => {
                 let name = name.clone();
                 let var_span = self.peek_location();
                 self.advance();
 
-                self.push_state(State::EndVarExpression(precedence, var_span, name));
+                self.push_state(State::EndVarExpression {
+                    precedence,
+                    span: var_span,
+                    name,
+                });
 
                 if let Token::Eq = self.peek() {
                     self.advance();
-                    self.push_state(State::BeginExpression(Precedence::root()));
+                    self.push_state(State::BeginExpression {
+                        precedence: Precedence::root(),
+                    });
                 }
             }
             _ => {
@@ -639,7 +730,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
                 // keep the state consistent
                 let left = self.push_node(Expr::Integer(0), location);
-                self.push_state(State::BeginExpressionInfix(precedence, left));
+                self.push_state(State::BeginExpressionInfix { precedence, left });
             }
         }
     }
@@ -650,7 +741,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         let next_precedence = next_token.precedence();
 
         if precedence > next_precedence {
-            self.push_state(State::EndExpression(left));
+            self.push_state(State::EndExpression { expr: left });
             return;
         }
 
@@ -658,49 +749,57 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             Token::Add => {
                 let op_span = self.peek_location();
                 self.advance();
-                self.push_state(State::EndBinaryExpression(
+                self.push_state(State::EndBinaryExpression {
                     precedence,
-                    op_span,
-                    BinOp::Add,
+                    span: op_span,
+                    op: BinOp::Add,
                     left,
-                ));
-                self.push_state(State::BeginExpression(next_precedence.next_precedence()));
+                });
+                self.push_state(State::BeginExpression {
+                    precedence: next_precedence.next_precedence(),
+                });
             }
             Token::Sub => {
                 let op_span = self.peek_location();
                 self.advance();
-                self.push_state(State::EndBinaryExpression(
+                self.push_state(State::EndBinaryExpression {
                     precedence,
-                    op_span,
-                    BinOp::Sub,
+                    span: op_span,
+                    op: BinOp::Sub,
                     left,
-                ));
-                self.push_state(State::BeginExpression(next_precedence.next_precedence()));
+                });
+                self.push_state(State::BeginExpression {
+                    precedence: next_precedence.next_precedence(),
+                });
             }
             Token::Mul => {
                 let op_span = self.peek_location();
                 self.advance();
-                self.push_state(State::EndBinaryExpression(
+                self.push_state(State::EndBinaryExpression {
                     precedence,
-                    op_span,
-                    BinOp::Mul,
+                    span: op_span,
+                    op: BinOp::Mul,
                     left,
-                ));
-                self.push_state(State::BeginExpression(next_precedence.next_precedence()));
+                });
+                self.push_state(State::BeginExpression {
+                    precedence: next_precedence.next_precedence(),
+                });
             }
             Token::Div => {
                 let op_span = self.peek_location();
                 self.advance();
-                self.push_state(State::EndBinaryExpression(
+                self.push_state(State::EndBinaryExpression {
                     precedence,
-                    op_span,
-                    BinOp::Div,
+                    span: op_span,
+                    op: BinOp::Div,
                     left,
-                ));
-                self.push_state(State::BeginExpression(next_precedence.next_precedence()));
+                });
+                self.push_state(State::BeginExpression {
+                    precedence: next_precedence.next_precedence(),
+                });
             }
             _ => {
-                self.push_state(State::EndExpression(left));
+                self.push_state(State::EndExpression { expr: left });
             }
         }
     }
@@ -714,7 +813,10 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 self.on_error(&"Expected ')'", Some(self.peek_location()));
             }
         };
-        self.push_state(State::BeginExpressionInfix(precedence, expression));
+        self.push_state(State::BeginExpressionInfix {
+            precedence,
+            left: expression,
+        });
     }
 
     fn end_variable_expression(
@@ -731,7 +833,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             },
             var_span,
         );
-        self.push_state(State::BeginExpressionInfix(precedence, left));
+        self.push_state(State::BeginExpressionInfix { precedence, left });
     }
 
     fn end_return_expression(
@@ -741,7 +843,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         right: Option<NodeRef>,
     ) {
         let left = self.push_node(Expr::Return { right }, return_span);
-        self.push_state(State::BeginExpressionInfix(precedence, left));
+        self.push_state(State::BeginExpressionInfix { precedence, left });
     }
 
     fn end_prefix_expression(
@@ -752,7 +854,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         right: NodeRef,
     ) {
         let left = self.push_node(Expr::UnOp { op, right }, op_span);
-        self.push_state(State::BeginExpressionInfix(precedence, left));
+        self.push_state(State::BeginExpressionInfix { precedence, left });
     }
 
     fn end_binary_expression(
@@ -764,7 +866,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         right: NodeRef,
     ) {
         let left = self.push_node(Expr::BinOp { op, left, right }, op_span);
-        self.push_state(State::BeginExpressionInfix(precedence, left));
+        self.push_state(State::BeginExpressionInfix { precedence, left });
     }
 }
 
