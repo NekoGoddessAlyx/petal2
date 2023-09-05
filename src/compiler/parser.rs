@@ -43,7 +43,7 @@ pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(
         ast_locations: Vec::with_capacity(tokens.len()),
     };
 
-    parser.push_state(State::BeginCompoundStatement);
+    parser.push_state(State::BeginStatementsRoot);
     parser.parse()?;
 
     parser.skip_nl();
@@ -69,21 +69,27 @@ pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(
     }
 }
 
+type StatementRoot = Option<NodeRef>;
+
 #[derive(Debug)]
 enum State<S> {
+    // root
+    BeginStatementsRoot,
+    ContinueStatementsRoot(NodeRef),
+
     // statements
-    BeginStatement,
-    EndStatement(NodeRef),
+    BeginStatement(StatementRoot),
+    EndStatement,
 
-    BeginCompoundStatement,
-    ContinueCompoundStatement(NodeRef),
-    EndCompoundStatement(NodeRef),
+    BeginBlockStatement(StatementRoot, Span),
+    ContinueBlockStatement(NodeRef),
+    EndBlockStatement,
 
-    BeginVariableDeclaration(Span, Mutability),
-    EndVariableDeclaration(Span, Mutability, S),
+    BeginVariableDeclaration(StatementRoot, Span, Mutability),
+    EndVariableDeclaration(StatementRoot, Span, Mutability, S),
 
-    BeginExpressionStatement,
-    EndExpressionStatement,
+    BeginExpressionStatement(StatementRoot),
+    EndExpressionStatement(StatementRoot),
 
     // expressions
     BeginExpression(Precedence),
@@ -111,59 +117,83 @@ impl<S: CompileString> State<S> {
         }
 
         match self {
-            // statements
-            State::BeginStatement => match from {
-                Some(State::BeginCompoundStatement)
-                | Some(State::ContinueCompoundStatement(..)) => {
-                    parser.begin_statement();
-                    Ok(())
-                }
-                _ => fail_transfer!(),
-            },
-            State::EndStatement(..) => match from {
-                Some(State::EndCompoundStatement(..))
-                | Some(State::EndVariableDeclaration(..))
-                | Some(State::EndExpressionStatement) => Ok(()),
-                _ => fail_transfer!(),
-            },
-
-            State::BeginCompoundStatement => match from {
-                // only valid while compound statement is the root
+            // root
+            State::BeginStatementsRoot => match from {
                 None => {
-                    parser.begin_compound_statement();
+                    parser.begin_statements_root();
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
-            State::ContinueCompoundStatement(len) => match from {
-                Some(State::EndStatement(statement)) => {
-                    parser.continue_compound_statement(*len, statement);
-                    Ok(())
-                }
-                _ => fail_transfer!(),
-            },
-            State::EndCompoundStatement(statement) => match from {
-                Some(State::ContinueCompoundStatement(..)) => {
-                    parser.end_compound_statement(*statement);
+            State::ContinueStatementsRoot(len) => match from {
+                Some(State::EndStatement) => {
+                    parser.continue_statements_root(*len);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
 
-            State::BeginVariableDeclaration(var_span, mutability) => match from {
-                Some(State::BeginStatement) => {
-                    parser.begin_variable_declaration(*var_span, *mutability);
+            // statements
+            State::BeginStatement(root) => match from {
+                Some(State::BeginStatementsRoot)
+                | Some(State::ContinueStatementsRoot(..))
+                | Some(State::BeginBlockStatement(..))
+                | Some(State::ContinueBlockStatement(..)) => {
+                    parser.begin_statement(*root);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
-            State::EndVariableDeclaration(var_span, mutability, name) => match from {
+            State::EndStatement => match from {
+                Some(State::EndBlockStatement)
+                | Some(State::EndVariableDeclaration(..))
+                | Some(State::EndExpressionStatement(..)) => Ok(()),
+                _ => fail_transfer!(),
+            },
+
+            State::BeginBlockStatement(root, span) => match from {
+                Some(State::BeginStatement(..)) => {
+                    parser.begin_block_statement(*root, *span);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+            State::ContinueBlockStatement(root) => match from {
+                Some(State::EndStatement) => {
+                    parser.continue_block_statement(*root);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+            State::EndBlockStatement => match from {
+                Some(State::ContinueBlockStatement(..)) => {
+                    parser.end_block_statement();
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+
+            State::BeginVariableDeclaration(root, var_span, mutability) => match from {
+                Some(State::BeginStatement(..)) => {
+                    parser.begin_variable_declaration(*root, *var_span, *mutability);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+            State::EndVariableDeclaration(root, var_span, mutability, name) => match from {
                 Some(State::BeginVariableDeclaration(..)) => {
-                    parser.end_variable_declaration(*var_span, *mutability, name.clone(), None);
+                    parser.end_variable_declaration(
+                        *root,
+                        *var_span,
+                        *mutability,
+                        name.clone(),
+                        None,
+                    );
                     Ok(())
                 }
                 Some(State::EndExpression(expression)) => {
                     parser.end_variable_declaration(
+                        *root,
                         *var_span,
                         *mutability,
                         name.clone(),
@@ -174,16 +204,16 @@ impl<S: CompileString> State<S> {
                 _ => fail_transfer!(),
             },
 
-            State::BeginExpressionStatement => match from {
-                Some(State::BeginStatement) => {
-                    parser.begin_expression_statement();
+            State::BeginExpressionStatement(root) => match from {
+                Some(State::BeginStatement(..)) => {
+                    parser.begin_expression_statement(*root);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
-            State::EndExpressionStatement => match from {
+            State::EndExpressionStatement(root) => match from {
                 Some(State::EndExpression(expression)) => {
-                    parser.end_expression_statement(expression);
+                    parser.end_expression_statement(*root, expression);
                     Ok(())
                 }
                 _ => fail_transfer!(),
@@ -192,7 +222,7 @@ impl<S: CompileString> State<S> {
             // expressions
             State::BeginExpression(precedence) => match from {
                 Some(State::BeginVariableDeclaration(..))
-                | Some(State::BeginExpressionStatement)
+                | Some(State::BeginExpressionStatement(..))
                 | Some(State::BeginExpression(..))
                 | Some(State::BeginExpressionInfix(..)) => {
                     parser.begin_expression(*precedence);
@@ -383,43 +413,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         Ok(())
     }
 
-    // statements
-
-    fn begin_statement(&mut self) {
-        self.skip_nl();
-        match self.peek() {
-            Token::Val => {
-                let val_span = self.peek_location();
-                self.advance();
-                self.push_state(State::BeginVariableDeclaration(
-                    val_span,
-                    Mutability::Immutable,
-                ));
-            }
-            Token::Var => {
-                let var_span = self.peek_location();
-                self.advance();
-                self.push_state(State::BeginVariableDeclaration(
-                    var_span,
-                    Mutability::Mutable,
-                ));
-            }
-            _ => {
-                self.push_state(State::BeginExpressionStatement);
-            }
-        }
-    }
-
-    fn begin_compound_statement(&mut self) {
-        let statement = self.push_node(Stat::Compound { len: RefLen(0) }, self.peek_location());
-        self.push_state(State::ContinueCompoundStatement(statement));
-        self.push_state(State::BeginStatement);
-    }
-
-    fn continue_compound_statement(&mut self, root: NodeRef, child: NodeRef) {
-        self.push_ref(root, child);
-
-        // panic recovery
+    fn recover_statements(&mut self) {
         if self.panic_mode {
             self.panic_mode = false;
 
@@ -431,24 +425,107 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 };
             }
         }
+    }
+
+    // root
+
+    fn begin_statements_root(&mut self) {
+        let root = self.push_node(Stat::Compound { len: RefLen(0) }, self.peek_location());
+        self.push_state(State::ContinueStatementsRoot(root));
+        self.push_state(State::BeginStatement(Some(root)));
+    }
+
+    fn continue_statements_root(&mut self, root: NodeRef) {
+        self.recover_statements();
 
         self.skip_nl();
         match self.peek() {
-            Token::Eof => {
-                self.push_state(State::EndCompoundStatement(root));
-            }
+            Token::Eof => {}
             _ => {
-                self.push_state(State::ContinueCompoundStatement(root));
-                self.push_state(State::BeginStatement);
+                self.push_state(State::ContinueStatementsRoot(root));
+                self.push_state(State::BeginStatement(Some(root)));
             }
         }
     }
 
-    fn end_compound_statement(&mut self, node: NodeRef) {
-        self.push_state(State::EndStatement(node));
+    // statements
+
+    fn begin_statement(&mut self, root: StatementRoot) {
+        self.skip_nl();
+        match self.peek() {
+            Token::BraceOpen => {
+                let span = self.peek_location();
+                self.advance();
+                self.push_state(State::BeginBlockStatement(root, span));
+            }
+            Token::Val => {
+                let val_span = self.peek_location();
+                self.advance();
+                self.push_state(State::BeginVariableDeclaration(
+                    root,
+                    val_span,
+                    Mutability::Immutable,
+                ));
+            }
+            Token::Var => {
+                let var_span = self.peek_location();
+                self.advance();
+                self.push_state(State::BeginVariableDeclaration(
+                    root,
+                    var_span,
+                    Mutability::Mutable,
+                ));
+            }
+            _ => {
+                self.push_state(State::BeginExpressionStatement(root));
+            }
+        }
     }
 
-    fn begin_variable_declaration(&mut self, var_span: Span, mutability: Mutability) {
+    fn begin_block_statement(&mut self, root: StatementRoot, span: Span) {
+        let block = self.push_node(Stat::Compound { len: RefLen(0) }, span);
+        if let Some(root) = root {
+            self.push_ref(root, block);
+        }
+
+        self.push_state(State::ContinueBlockStatement(block));
+        self.push_state(State::BeginStatement(Some(block)));
+    }
+
+    fn continue_block_statement(&mut self, block: NodeRef) {
+        self.recover_statements();
+
+        self.skip_nl();
+        match self.peek() {
+            Token::Eof | Token::BraceClose => {
+                self.push_state(State::EndBlockStatement);
+            }
+            _ => {
+                self.push_state(State::ContinueBlockStatement(block));
+                self.push_state(State::BeginStatement(Some(block)));
+            }
+        }
+    }
+
+    fn end_block_statement(&mut self) {
+        match self.peek() {
+            Token::BraceClose => {
+                self.advance();
+            }
+            _ => {
+                self.on_error(&"Expected '}'", Some(self.peek_location()));
+            }
+        }
+
+        self.push_state(State::EndStatement);
+    }
+
+    fn begin_variable_declaration(
+        &mut self,
+        root: StatementRoot,
+        var_span: Span,
+        mutability: Mutability,
+    ) {
         self.skip_nl();
         let name = match self.peek() {
             Token::Identifier(name) => {
@@ -462,7 +539,9 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             }
         };
 
-        self.push_state(State::EndVariableDeclaration(var_span, mutability, name));
+        self.push_state(State::EndVariableDeclaration(
+            root, var_span, mutability, name,
+        ));
 
         // do not skip NL
         if let Token::Eq = self.peek() {
@@ -473,6 +552,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     fn end_variable_declaration(
         &mut self,
+        root: StatementRoot,
         var_span: Span,
         mutability: Mutability,
         name: S,
@@ -486,21 +566,29 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             },
             var_span,
         );
-        self.push_state(State::EndStatement(statement));
+        if let Some(root) = root {
+            self.push_ref(root, statement);
+        }
+
+        self.push_state(State::EndStatement);
         self.end_of_statement();
     }
 
-    fn begin_expression_statement(&mut self) {
-        self.push_state(State::EndExpressionStatement);
+    fn begin_expression_statement(&mut self, root: StatementRoot) {
+        self.push_state(State::EndExpressionStatement(root));
         self.push_state(State::BeginExpression(Precedence::root()));
     }
 
-    fn end_expression_statement(&mut self, expression: NodeRef) {
+    fn end_expression_statement(&mut self, root: StatementRoot, expression: NodeRef) {
         let statement = self.push_node(
             Stat::Expr { expr: expression },
             self.get_node_location(expression),
         );
-        self.push_state(State::EndStatement(statement));
+        if let Some(root) = root {
+            self.push_ref(root, statement);
+        }
+
+        self.push_state(State::EndStatement);
         self.end_of_statement();
     }
 

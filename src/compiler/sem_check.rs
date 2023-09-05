@@ -131,9 +131,9 @@ impl State {
                 //_ => fail_transfer!(),
             },
             State::ExitStat(statement) => match from {
-                Some(State::EnterStat(..)) | Some(State::EnterExpr(..)) => {
-                    sem_check.exit_statement(statement)
-                }
+                Some(State::EnterStat(..))
+                | Some(State::ExitStat(..))
+                | Some(State::EnterExpr(..)) => sem_check.exit_statement(statement),
                 _ => fail_transfer!(),
             },
             State::ContinueCompoundStat(len) => match from {
