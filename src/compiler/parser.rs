@@ -107,7 +107,7 @@ enum State<S> {
         parent: StatementParent,
     },
     EndExpressionStatement {
-        parent: StatementParent,
+        expr_stat: NodeRef,
     },
 
     // expressions
@@ -247,9 +247,9 @@ impl<S: CompileString> State<S> {
                 }
                 _ => fail_transfer!(),
             },
-            State::EndExpressionStatement { parent } => match from {
+            State::EndExpressionStatement { expr_stat } => match from {
                 Some(State::EndExpression { expr }) => {
-                    parser.end_expression_statement(*parent, expr);
+                    parser.end_expression_statement(*expr_stat, expr);
                     Ok(())
                 }
                 _ => fail_transfer!(),
@@ -434,10 +434,6 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         NodeRef(index as u32)
     }
 
-    fn get_node_location(&self, index: NodeRef) -> Span {
-        self.ast_locations[index.0 as usize]
-    }
-
     // node patching
 
     fn push_ref_to_compound_stat(&mut self, root: NodeRef, index: NodeRef) {
@@ -450,6 +446,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         self.refs.push(index);
     }
 
+    // todo: could probably switch to the insert and swap mechanic
     fn patch_var_decl_def(&mut self, var_decl: NodeRef, definition: Option<NodeRef>) {
         match self.nodes.get_mut(var_decl.0 as usize) {
             Some(Node::Stat(Stat::VarDecl { def, .. })) => {
@@ -457,6 +454,50 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             }
             _ => todo!("Unexpected node"),
         }
+    }
+
+    // todo: could probably switch to the insert and swap mechanic
+    fn patch_expr_stat(&mut self, expr_stat: NodeRef, expression: NodeRef) {
+        match self.nodes.get_mut(expr_stat.0 as usize) {
+            Some(Node::Stat(Stat::Expr { expr })) => {
+                *expr = expression;
+                self.ast_locations[expr_stat.0 as usize] =
+                    self.ast_locations[expression.0 as usize];
+            }
+            _ => todo!("Unexpected node"),
+        }
+    }
+
+    /// Inserts a new node and swaps the given index with the newly inserted node.
+    /// The new index will be returned in a callback
+    /// (the new index points to whatever node was originally stored at the given index).
+    ///
+    /// This preserves the order of a root node being the first in a sequence but
+    /// any intermediate children nodes will find themselves in an unordered state.
+    /// This should be fine as it preserves the order of roots of any sequences of data.
+    fn insert_and_swap_nodes<N, F>(&mut self, index: NodeRef, f: F) -> NodeRef
+    where
+        N: Into<Node<S>>,
+        F: FnOnce(NodeRef) -> (N, Span),
+    {
+        // push "junk" to reserve a slot in the array
+        // it will be replaced with properly initialized values in the end
+        let b = self.push_node(Expr::Integer(0), Span::default());
+        let a_index = index.0 as usize;
+        let b_index = b.0 as usize;
+
+        // swap the new allocation with the given index
+        self.nodes.swap(a_index, b_index);
+        self.ast_locations.swap(a_index, b_index);
+
+        // feed the adjusted index (the newly reserved index) into the fn
+        let (node, span) = f(b);
+
+        // replace "junk" with the the fn result
+        self.nodes[a_index] = node.into();
+        self.ast_locations[a_index] = span;
+
+        index
     }
 
     // parse
@@ -636,21 +677,24 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     }
 
     fn begin_expression_statement(&mut self, root: StatementParent) {
-        self.push_state(State::EndExpressionStatement { parent: root });
+        let expr_stat = self.push_node(
+            Stat::Expr {
+                expr: NodeRef::default(),
+            },
+            Span::default(),
+        );
+        if let Some(root) = root {
+            self.push_ref_to_compound_stat(root, expr_stat);
+        }
+
+        self.push_state(State::EndExpressionStatement { expr_stat });
         self.push_state(State::BeginExpression {
             precedence: Precedence::root(),
         });
     }
 
-    fn end_expression_statement(&mut self, root: StatementParent, expression: NodeRef) {
-        let statement = self.push_node(
-            Stat::Expr { expr: expression },
-            self.get_node_location(expression),
-        );
-        if let Some(root) = root {
-            self.push_ref_to_compound_stat(root, statement);
-        }
-
+    fn end_expression_statement(&mut self, expr_stat: NodeRef, expression: NodeRef) {
+        self.patch_expr_stat(expr_stat, expression);
         self.push_state(State::EndStatement);
         self.end_of_statement();
     }
@@ -826,13 +870,24 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         name: S,
         right: Option<NodeRef>,
     ) {
-        let left = self.push_node(
-            Expr::Var {
-                name,
-                assignment: right,
-            },
-            var_span,
-        );
+        let left = match right {
+            Some(right) => self.insert_and_swap_nodes(right, |right| {
+                (
+                    Expr::Var {
+                        name,
+                        assignment: Some(right),
+                    },
+                    var_span,
+                )
+            }),
+            None => self.push_node(
+                Expr::Var {
+                    name,
+                    assignment: None,
+                },
+                var_span,
+            ),
+        };
         self.push_state(State::BeginExpressionInfix { precedence, left });
     }
 
@@ -842,7 +897,12 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         return_span: Span,
         right: Option<NodeRef>,
     ) {
-        let left = self.push_node(Expr::Return { right }, return_span);
+        let left = match right {
+            Some(right) => self.insert_and_swap_nodes(right, |right| {
+                (Expr::Return { right: Some(right) }, return_span)
+            }),
+            None => self.push_node(Expr::Return { right }, return_span),
+        };
         self.push_state(State::BeginExpressionInfix { precedence, left });
     }
 
@@ -853,7 +913,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         op: UnOp,
         right: NodeRef,
     ) {
-        let left = self.push_node(Expr::UnOp { op, right }, op_span);
+        let left = self.insert_and_swap_nodes(right, |right| (Expr::UnOp { op, right }, op_span));
         self.push_state(State::BeginExpressionInfix { precedence, left });
     }
 
@@ -865,7 +925,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         left: NodeRef,
         right: NodeRef,
     ) {
-        let left = self.push_node(Expr::BinOp { op, left, right }, op_span);
+        self.insert_and_swap_nodes(left, |left| (Expr::BinOp { op, left, right }, op_span));
         self.push_state(State::BeginExpressionInfix { precedence, left });
     }
 }
