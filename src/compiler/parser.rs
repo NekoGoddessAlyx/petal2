@@ -86,7 +86,7 @@ enum State<S> {
     EndBlockStatement,
 
     BeginVariableDeclaration(StatementRoot, Span, Mutability),
-    EndVariableDeclaration(StatementRoot, Span, Mutability, S),
+    EndVariableDeclaration(NodeRef),
 
     BeginExpressionStatement(StatementRoot),
     EndExpressionStatement(StatementRoot),
@@ -180,25 +180,13 @@ impl<S: CompileString> State<S> {
                 }
                 _ => fail_transfer!(),
             },
-            State::EndVariableDeclaration(root, var_span, mutability, name) => match from {
+            State::EndVariableDeclaration(var_decl) => match from {
                 Some(State::BeginVariableDeclaration(..)) => {
-                    parser.end_variable_declaration(
-                        *root,
-                        *var_span,
-                        *mutability,
-                        name.clone(),
-                        None,
-                    );
+                    parser.end_variable_declaration(*var_decl, None);
                     Ok(())
                 }
                 Some(State::EndExpression(expression)) => {
-                    parser.end_variable_declaration(
-                        *root,
-                        *var_span,
-                        *mutability,
-                        name.clone(),
-                        Some(expression),
-                    );
+                    parser.end_variable_declaration(*var_decl, Some(expression));
                     Ok(())
                 }
                 _ => fail_transfer!(),
@@ -386,7 +374,13 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         NodeRef(index as u32)
     }
 
-    fn push_ref(&mut self, root: NodeRef, index: NodeRef) {
+    fn get_node_location(&self, index: NodeRef) -> Span {
+        self.ast_locations[index.0 as usize]
+    }
+
+    // node patching
+
+    fn push_ref_to_compound_stat(&mut self, root: NodeRef, index: NodeRef) {
         match self.nodes.get_mut(root.0 as usize) {
             Some(Node::Stat(Stat::Compound { len })) => {
                 len.0 += 1;
@@ -396,8 +390,13 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         self.refs.push(index);
     }
 
-    fn get_node_location(&self, index: NodeRef) -> Span {
-        self.ast_locations[index.0 as usize]
+    fn patch_var_decl_def(&mut self, var_decl: NodeRef, definition: Option<NodeRef>) {
+        match self.nodes.get_mut(var_decl.0 as usize) {
+            Some(Node::Stat(Stat::VarDecl { def, .. })) => {
+                *def = definition;
+            }
+            _ => todo!("Unexpected node"),
+        }
     }
 
     // parse
@@ -485,7 +484,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     fn begin_block_statement(&mut self, root: StatementRoot, span: Span) {
         let block = self.push_node(Stat::Compound { len: RefLen(0) }, span);
         if let Some(root) = root {
-            self.push_ref(root, block);
+            self.push_ref_to_compound_stat(root, block);
         }
 
         self.push_state(State::ContinueBlockStatement(block));
@@ -539,9 +538,19 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             }
         };
 
-        self.push_state(State::EndVariableDeclaration(
-            root, var_span, mutability, name,
-        ));
+        let statement = self.push_node(
+            Stat::VarDecl {
+                mutability,
+                name,
+                def: None,
+            },
+            var_span,
+        );
+        if let Some(root) = root {
+            self.push_ref_to_compound_stat(root, statement);
+        }
+
+        self.push_state(State::EndVariableDeclaration(statement));
 
         // do not skip NL
         if let Token::Eq = self.peek() {
@@ -550,26 +559,8 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         }
     }
 
-    fn end_variable_declaration(
-        &mut self,
-        root: StatementRoot,
-        var_span: Span,
-        mutability: Mutability,
-        name: S,
-        def: Option<NodeRef>,
-    ) {
-        let statement = self.push_node(
-            Stat::VarDecl {
-                mutability,
-                name,
-                def,
-            },
-            var_span,
-        );
-        if let Some(root) = root {
-            self.push_ref(root, statement);
-        }
-
+    fn end_variable_declaration(&mut self, var_decl: NodeRef, definition: Option<NodeRef>) {
+        self.patch_var_decl_def(var_decl, definition);
         self.push_state(State::EndStatement);
         self.end_of_statement();
     }
@@ -585,7 +576,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             self.get_node_location(expression),
         );
         if let Some(root) = root {
-            self.push_ref(root, statement);
+            self.push_ref_to_compound_stat(root, statement);
         }
 
         self.push_state(State::EndStatement);
