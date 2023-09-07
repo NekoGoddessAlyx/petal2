@@ -203,14 +203,15 @@ impl<S: CompileString> State<S> {
                 _ => fail_transfer!(),
             },
             State::ContinueBlockStatement { block } => match from {
-                Some(State::EndStatement) => {
+                Some(State::EndStatement) | Some(State::BeginBlockStatement { .. }) => {
                     parser.continue_block_statement(*block);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
             State::EndBlockStatement => match from {
-                Some(State::ContinueBlockStatement { .. }) => {
+                Some(State::BeginBlockStatement { .. })
+                | Some(State::ContinueBlockStatement { .. }) => {
                     parser.end_block_statement();
                     Ok(())
                 }
@@ -585,15 +586,20 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     }
 
     fn begin_block_statement(&mut self, root: StatementParent, span: Span) {
-        let block = self.push_node(Stat::Compound { len: RefLen(0) }, span);
-        if let Some(root) = root {
-            self.push_ref_to_compound_stat(root, block);
-        }
+        self.skip_nl();
+        match self.peek() {
+            Token::BraceClose => {
+                self.push_state(State::EndBlockStatement);
+            }
+            _ => {
+                let block = self.push_node(Stat::Compound { len: RefLen(0) }, span);
+                if let Some(root) = root {
+                    self.push_ref_to_compound_stat(root, block);
+                }
 
-        self.push_state(State::ContinueBlockStatement { block });
-        self.push_state(State::BeginStatement {
-            parent: Some(block),
-        });
+                self.push_state(State::ContinueBlockStatement { block });
+            }
+        }
     }
 
     fn continue_block_statement(&mut self, block: NodeRef) {
