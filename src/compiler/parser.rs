@@ -69,7 +69,7 @@ pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(
     }
 }
 
-type StatementParent = Option<NodeRef>;
+type ParentNode = Option<NodeRef>;
 
 #[derive(Debug)]
 enum State<S> {
@@ -81,12 +81,12 @@ enum State<S> {
 
     // statements
     BeginStatement {
-        parent: StatementParent,
+        parent: ParentNode,
     },
     EndStatement,
 
     BeginBlockStatement {
-        parent: StatementParent,
+        parent: ParentNode,
         span: Span,
     },
     ContinueBlockStatement {
@@ -95,7 +95,7 @@ enum State<S> {
     EndBlockStatement,
 
     BeginVariableDeclaration {
-        parent: StatementParent,
+        parent: ParentNode,
         span: Span,
         mutability: Mutability,
     },
@@ -104,7 +104,7 @@ enum State<S> {
     },
 
     BeginExpressionStatement {
-        parent: StatementParent,
+        parent: ParentNode,
     },
     EndExpressionStatement {
         expr_stat: NodeRef,
@@ -145,6 +145,14 @@ enum State<S> {
         op: BinOp,
         left: NodeRef,
     },
+    ContinueBlockExpression {
+        precedence: Precedence,
+        block: NodeRef,
+    },
+    EndBlockExpression {
+        precedence: Precedence,
+        block: NodeRef,
+    },
 }
 
 impl<S: CompileString> State<S> {
@@ -182,7 +190,8 @@ impl<S: CompileString> State<S> {
                 Some(State::BeginStatementsRoot)
                 | Some(State::ContinueStatementsRoot { .. })
                 | Some(State::BeginBlockStatement { .. })
-                | Some(State::ContinueBlockStatement { .. }) => {
+                | Some(State::ContinueBlockStatement { .. })
+                | Some(State::ContinueBlockExpression { .. }) => {
                     parser.begin_statement(*parent);
                     Ok(())
                 }
@@ -278,7 +287,8 @@ impl<S: CompileString> State<S> {
                 | Some(State::EndVarExpression { .. })
                 | Some(State::EndReturnExpression { .. })
                 | Some(State::EndPrefixExpression { .. })
-                | Some(State::EndBinaryExpression { .. }) => {
+                | Some(State::EndBinaryExpression { .. })
+                | Some(State::EndBlockExpression { .. }) => {
                     parser.begin_expression_infix(*precedence, *left);
                     Ok(())
                 }
@@ -342,6 +352,20 @@ impl<S: CompileString> State<S> {
             } => match from {
                 Some(State::EndExpression { expr: right }) => {
                     parser.end_binary_expression(*precedence, *span, *op, *left, right);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+            State::ContinueBlockExpression { precedence, block } => match from {
+                Some(State::BeginExpression { .. }) | Some(State::EndStatement { .. }) => {
+                    parser.continue_block_expression(*precedence, *block);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+            State::EndBlockExpression { precedence, block } => match from {
+                Some(State::ContinueBlockExpression { .. }) => {
+                    parser.end_block_expression(*precedence, *block);
                     Ok(())
                 }
                 _ => fail_transfer!(),
@@ -414,6 +438,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     fn end_of_statement(&mut self) {
         match self.peek() {
             Token::Nl | Token::Eof => {}
+            Token::BraceClose => {}
             _ => {
                 self.on_error(&"Expected end of statement", Some(self.peek_location()));
             }
@@ -437,14 +462,17 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     // node patching
 
-    fn push_ref_to_compound_stat(&mut self, root: NodeRef, index: NodeRef) {
-        match self.nodes.get_mut(root.0 as usize) {
+    fn push_ref_to_parent(&mut self, parent: NodeRef, child: NodeRef) {
+        match self.nodes.get_mut(parent.0 as usize) {
             Some(Node::Stat(Stat::Compound { len })) => {
                 len.0 += 1;
             }
+            Some(Node::Expr(Expr::Block { stats_len, .. })) => {
+                stats_len.0 += 1;
+            }
             _ => todo!("Unexpected node"),
         }
-        self.refs.push(index);
+        self.refs.push(child);
     }
 
     // todo: could probably switch to the insert and swap mechanic
@@ -464,6 +492,24 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 *expr = expression;
                 self.ast_locations[expr_stat.0 as usize] =
                     self.ast_locations[expression.0 as usize];
+            }
+            _ => todo!("Unexpected node"),
+        }
+    }
+
+    fn patch_block_expr(&mut self, block_expr: NodeRef, expression: NodeRef) {
+        match self.nodes.get_mut(block_expr.0 as usize) {
+            Some(Node::Expr(Expr::Block {
+                stats_len,
+                tail_expr,
+            })) => {
+                *stats_len = RefLen(stats_len.0 - 1);
+                *tail_expr = expression;
+
+                if stats_len.0 == 0 {
+                    self.nodes
+                        .swap(block_expr.0 as usize, expression.0 as usize);
+                }
             }
             _ => todo!("Unexpected node"),
         }
@@ -553,7 +599,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     // statements
 
-    fn begin_statement(&mut self, root: StatementParent) {
+    fn begin_statement(&mut self, root: ParentNode) {
         self.skip_nl();
         match self.peek() {
             Token::BraceOpen => {
@@ -585,7 +631,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         }
     }
 
-    fn begin_block_statement(&mut self, root: StatementParent, span: Span) {
+    fn begin_block_statement(&mut self, root: ParentNode, span: Span) {
         self.skip_nl();
         match self.peek() {
             Token::BraceClose => {
@@ -634,7 +680,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     fn begin_variable_declaration(
         &mut self,
-        root: StatementParent,
+        root: ParentNode,
         var_span: Span,
         mutability: Mutability,
     ) {
@@ -660,7 +706,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             var_span,
         );
         if let Some(root) = root {
-            self.push_ref_to_compound_stat(root, statement);
+            self.push_ref_to_parent(root, statement);
         }
 
         self.push_state(State::EndVariableDeclaration {
@@ -682,7 +728,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         self.end_of_statement();
     }
 
-    fn begin_expression_statement(&mut self, root: StatementParent) {
+    fn begin_expression_statement(&mut self, root: ParentNode) {
         let expr_stat = self.push_node(
             Stat::Expr {
                 expr: NodeRef::default(),
@@ -690,7 +736,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             Span::default(),
         );
         if let Some(root) = root {
-            self.push_ref_to_compound_stat(root, expr_stat);
+            self.push_ref_to_parent(root, expr_stat);
         }
 
         self.push_state(State::EndExpressionStatement { expr_stat });
@@ -724,6 +770,19 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                         precedence: Precedence::root(),
                     });
                 }
+            }
+            Token::BraceOpen => {
+                let brace_span = self.peek_location();
+                self.advance();
+                let block = self.push_node(
+                    Expr::Block {
+                        stats_len: RefLen(0),
+                        tail_expr: NodeRef::default(),
+                    },
+                    brace_span,
+                );
+
+                self.push_state(State::ContinueBlockExpression { precedence, block });
             }
             Token::ParenOpen => {
                 self.advance();
@@ -934,6 +993,58 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         self.insert_and_swap_nodes(left, |left| (Expr::BinOp { op, left, right }, op_span));
         self.push_state(State::BeginExpressionInfix { precedence, left });
     }
+
+    fn continue_block_expression(&mut self, precedence: Precedence, block: NodeRef) {
+        self.recover_statements();
+
+        self.skip_nl();
+        match self.peek() {
+            Token::Eof | Token::BraceClose => {
+                self.push_state(State::EndBlockExpression { precedence, block });
+            }
+            _ => {
+                self.push_state(State::ContinueBlockExpression { precedence, block });
+                self.push_state(State::BeginStatement {
+                    parent: Some(block),
+                });
+            }
+        }
+    }
+
+    fn end_block_expression(&mut self, precedence: Precedence, block: NodeRef) {
+        let brace_span = self.peek_location();
+        match self.peek() {
+            Token::BraceClose => {
+                self.advance();
+            }
+            _ => {
+                self.on_error(&"Expected '}'", Some(self.peek_location()));
+            }
+        }
+
+        // pop the last statement ref
+        // expect an expression statement and extract the expression
+        // patch the tail_expr part of the block expr
+        match self.refs.pop() {
+            Some(expr_stat) => match self.nodes[expr_stat.0 as usize] {
+                Node::Stat(Stat::Expr { expr }) => {
+                    self.patch_block_expr(block, expr);
+                }
+                _ => {
+                    let stat_span = self.ast_locations[expr_stat.0 as usize];
+                    self.on_error(&"Expected expression", Some(stat_span));
+                }
+            },
+            None => {
+                self.on_error(&"Expected expression", Some(brace_span));
+            }
+        }
+
+        self.push_state(State::BeginExpressionInfix {
+            precedence,
+            left: block,
+        });
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, PartialOrd, Debug)]
@@ -972,6 +1083,7 @@ impl<S> Token<S> {
     fn is_statement(&self) -> bool {
         match self {
             Token::Val | Token::Var => true,
+            Token::BraceOpen => true,
             _ if self.is_expression() => true,
             _ => false,
         }
@@ -982,6 +1094,7 @@ impl<S> Token<S> {
         #[allow(clippy::match_like_matches_macro)]
         match self {
             Token::Return
+            | Token::BraceOpen
             | Token::ParenOpen
             | Token::Integer(_)
             | Token::Float(_)

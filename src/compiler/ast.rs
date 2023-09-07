@@ -90,6 +90,10 @@ pub enum Expr<S> {
         left: NodeRef,
         right: NodeRef,
     },
+    Block {
+        stats_len: RefLen,
+        tail_expr: NodeRef,
+    },
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -134,6 +138,9 @@ enum State {
     EnterExpr(NodeRef),
     ContinueBinExpr(BinOp),
     EndBinExpr,
+    ContinueBlockExpr(RefLen),
+    EnterTailExpr(NodeRef),
+    EndBlockExpr,
 }
 
 type Result<T> = std::result::Result<T, PrinterErr>;
@@ -212,6 +219,9 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
                 State::EnterExpr(node) => self.enter_expr(node)?,
                 State::ContinueBinExpr(op) => self.continue_bin_expr(op)?,
                 State::EndBinExpr => self.end_bin_expr()?,
+                State::ContinueBlockExpr(len) => self.continue_block_expr(len)?,
+                State::EnterTailExpr(tail_expr) => self.enter_tail_expr(tail_expr)?,
+                State::EndBlockExpr => self.end_block_expr()?,
             };
         }
 
@@ -304,6 +314,15 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
                 self.push_state(State::ContinueBinExpr(op));
                 self.push_state(State::EnterExpr(left));
             }
+            Expr::Block {
+                stats_len,
+                tail_expr,
+            } => {
+                write!(self, "{{")?;
+                self.indent();
+                self.push_state(State::EnterTailExpr(tail_expr));
+                self.push_state(State::ContinueBlockExpr(stats_len));
+            }
         };
 
         Ok(())
@@ -322,6 +341,34 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
 
     fn end_bin_expr(&mut self) -> Result<()> {
         write!(self, ")")?;
+
+        Ok(())
+    }
+
+    fn continue_block_expr(&mut self, len: RefLen) -> Result<()> {
+        if len.0 > 0 {
+            let new_len = len.0 - 1;
+            self.push_state(State::ContinueBlockExpr(RefLen(new_len)));
+
+            let next_statement = self.get_next_ref();
+            self.push_state(State::EnterStat(next_statement));
+        }
+
+        Ok(())
+    }
+
+    fn enter_tail_expr(&mut self, tail_expr: NodeRef) -> Result<()> {
+        writeln!(self)?;
+        self.push_state(State::EndBlockExpr);
+        self.push_state(State::EnterExpr(tail_expr));
+
+        Ok(())
+    }
+
+    fn end_block_expr(&mut self) -> Result<()> {
+        self.unindent();
+        writeln!(self)?;
+        write!(self, "}}")?;
 
         Ok(())
     }

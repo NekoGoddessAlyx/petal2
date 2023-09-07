@@ -105,6 +105,7 @@ enum State {
 
     // expressions
     EnterExpr(NodeRef),
+    ContinueBlockExpr(RefLen),
 }
 
 impl State {
@@ -127,12 +128,14 @@ impl State {
                 | Some(State::EnterStat(..))
                 | Some(State::ExitStat(..))
                 | Some(State::ContinueCompoundStat(..))
-                | Some(State::EnterExpr(..)) => sem_check.enter_statement(statement),
+                | Some(State::EnterExpr(..))
+                | Some(State::ContinueBlockExpr(..)) => sem_check.enter_statement(statement),
                 //_ => fail_transfer!(),
             },
             State::ExitStat(statement) => match from {
                 Some(State::EnterStat(..))
                 | Some(State::ExitStat(..))
+                | Some(State::ContinueCompoundStat(..))
                 | Some(State::EnterExpr(..)) => sem_check.exit_statement(statement),
                 _ => fail_transfer!(),
             },
@@ -145,8 +148,15 @@ impl State {
 
             // expressions
             State::EnterExpr(expression) => match from {
-                Some(State::EnterStat(..)) | Some(State::EnterExpr(..)) => {
-                    sem_check.enter_expression(expression)
+                Some(State::EnterStat(..))
+                | Some(State::ExitStat(..))
+                | Some(State::EnterExpr(..))
+                | Some(State::ContinueBlockExpr(..)) => sem_check.enter_expression(expression),
+                _ => fail_transfer!(),
+            },
+            State::ContinueBlockExpr(len) => match from {
+                Some(State::ExitStat(..)) | Some(State::EnterExpr(..)) => {
+                    sem_check.continue_block_expr(len)
                 }
                 _ => fail_transfer!(),
             },
@@ -349,13 +359,13 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     }
 
     fn continue_compound_statement(&mut self, len: RefLen) -> Result<()> {
-        if len.0 > 1 {
+        if len.0 > 0 {
             let new_len = len.0 - 1;
             self.push_state(State::ContinueCompoundStat(RefLen(new_len)));
-        }
 
-        let next_statement = self.get_next_ref();
-        self.push_state(State::EnterStat(next_statement));
+            let next_statement = self.get_next_ref();
+            self.push_state(State::EnterStat(next_statement));
+        }
 
         Ok(())
     }
@@ -416,7 +426,28 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
 
                 Ok(())
             }
+            Expr::Block {
+                stats_len,
+                tail_expr,
+            } => {
+                self.push_state(State::EnterExpr(*tail_expr));
+                self.push_state(State::ContinueBlockExpr(*stats_len));
+
+                Ok(())
+            }
         }
+    }
+
+    fn continue_block_expr(&mut self, len: RefLen) -> Result<()> {
+        if len.0 > 0 {
+            let new_len = len.0 - 1;
+            self.push_state(State::ContinueBlockExpr(RefLen(new_len)));
+
+            let next_statement = self.get_next_ref();
+            self.push_state(State::EnterStat(next_statement));
+        }
+
+        Ok(())
     }
 }
 

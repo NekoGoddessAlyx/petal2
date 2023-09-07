@@ -101,6 +101,8 @@ enum State {
     ExitUnaryExpr(UnOp, ExprDest),
     ContinueBinaryExpr(BinOp, NodeRef, ExprDest),
     ExitBinaryExpr(BinOp, RegisterOrConstant16, ExprDest),
+    ContinueBlockExpr(RefLen),
+    ExitBlockExpr(u16, ExprDest),
 }
 
 impl State {
@@ -123,7 +125,8 @@ impl State {
                 None
                 | Some(State::ExitStat)
                 | Some(State::EnterStat(..))
-                | Some(State::ContinueCompoundStat(..)) => code_gen.enter_statement(*statement),
+                | Some(State::ContinueCompoundStat(..))
+                | Some(State::ContinueBlockExpr(..)) => code_gen.enter_statement(*statement),
                 _ => fail_transfer!(),
             },
             State::ExitStat => match from {
@@ -142,7 +145,9 @@ impl State {
                 _ => fail_transfer!(),
             },
             State::ExitCompoundStat(stack_top) => match from {
-                Some(State::EnterStat(..)) | Some(State::ExitStat) => {
+                Some(State::EnterStat(..))
+                | Some(State::ExitStat)
+                | Some(State::ContinueCompoundStat(..)) => {
                     code_gen.exit_compound_statement(*stack_top)
                 }
                 _ => fail_transfer!(),
@@ -159,9 +164,11 @@ impl State {
             // expressions
             State::EnterExprAnywhere(expression) => match from {
                 Some(State::EnterStat(..))
+                | Some(State::ExitStat)
                 | Some(State::EnterExprAnywhere(..))
                 | Some(State::EnterExpr(..))
-                | Some(State::ContinueBinaryExpr(..)) => {
+                | Some(State::ContinueBinaryExpr(..))
+                | Some(State::ContinueBlockExpr(..)) => {
                     code_gen.enter_expression_anywhere(*expression)
                 }
                 _ => fail_transfer!(),
@@ -180,7 +187,8 @@ impl State {
                 | Some(State::EnterExpr(..))
                 | Some(State::ExitReturnExpr(..))
                 | Some(State::ExitUnaryExpr(..))
-                | Some(State::ExitBinaryExpr(..)) => Ok(()),
+                | Some(State::ExitBinaryExpr(..))
+                | Some(State::ExitBlockExpr(..)) => Ok(()),
                 _ => fail_transfer!(),
             },
 
@@ -207,6 +215,18 @@ impl State {
             State::ExitBinaryExpr(op, left, dest) => match from {
                 Some(State::ExitExpr(right)) => {
                     code_gen.exit_binary_expression(*op, *left, right, *dest)
+                }
+                _ => fail_transfer!(),
+            },
+            State::ContinueBlockExpr(len) => match from {
+                Some(State::ExitStat)
+                | Some(State::EnterExprAnywhere(..))
+                | Some(State::EnterExpr(..)) => code_gen.continue_block_expr(*len),
+                _ => fail_transfer!(),
+            },
+            State::ExitBlockExpr(stack_top, dest) => match from {
+                Some(State::ExitExpr(tail_expr)) => {
+                    code_gen.exit_block_expr(*stack_top, tail_expr, *dest)
                 }
                 _ => fail_transfer!(),
             },
@@ -441,13 +461,13 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     }
 
     fn continue_compound_statement(&mut self, len: RefLen) -> Result<()> {
-        if len.0 > 1 {
+        if len.0 > 0 {
             let new_len = len.0 - 1;
             self.push_state(State::ContinueCompoundStat(RefLen(new_len)));
-        }
 
-        let next_statement = self.get_next_ref();
-        self.push_state(State::EnterStat(next_statement));
+            let next_statement = self.get_next_ref();
+            self.push_state(State::EnterStat(next_statement));
+        }
 
         Ok(())
     }
@@ -595,6 +615,17 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
                 Ok(())
             }
+            Expr::Block {
+                stats_len,
+                tail_expr,
+            } => {
+                let stack_top = self.current_function.registers.stack_top();
+                self.push_state(State::ExitBlockExpr(stack_top, dest));
+                self.push_state(State::EnterExprAnywhere(tail_expr));
+                self.push_state(State::ContinueBlockExpr(stats_len));
+
+                Ok(())
+            }
         }
     }
 
@@ -673,6 +704,47 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
             BinOp::Div => Instruction::div(dest.into(), left, right),
         };
         self.push_instruction(instruction);
+        self.push_state(State::ExitExpr(dest.into()));
+
+        Ok(())
+    }
+
+    fn continue_block_expr(&mut self, len: RefLen) -> Result<()> {
+        if len.0 > 0 {
+            let new_len = len.0 - 1;
+            self.push_state(State::ContinueBlockExpr(RefLen(new_len)));
+
+            let next_statement = self.get_next_ref();
+            self.push_state(State::EnterStat(next_statement));
+        }
+
+        Ok(())
+    }
+
+    fn exit_block_expr(
+        &mut self,
+        stack_top: u16,
+        expr: RegisterOrConstant16,
+        dest: ExprDest,
+    ) -> Result<()> {
+        self.current_function.registers.pop_to(stack_top);
+
+        let dest = self.allocate(dest)?;
+        match expr {
+            RegisterOrConstant16::Protected(tail_r) | RegisterOrConstant16::Temporary(tail_r) => {
+                let dest_register: Register = dest.into();
+                if dest_register != tail_r {
+                    self.push_instruction(Instruction::LoadR {
+                        destination: dest.into(),
+                        from: tail_r.into(),
+                    });
+                }
+            }
+            _ => {
+                self.push_instruction(Instruction::load(dest.into(), expr));
+            }
+        }
+
         self.push_state(State::ExitExpr(dest.into()));
 
         Ok(())
@@ -811,24 +883,24 @@ impl Instruction {
         }
     }
 
-    // fn load(dest: Register, from: RegisterOrConstant16) -> Instruction {
-    //     match from {
-    //         RegisterOrConstant16::Protected(r) | RegisterOrConstant16::Temporary(r) => {
-    //             Instruction::LoadR {
-    //                 destination: dest.into(),
-    //                 from: r.into(),
-    //             }
-    //         }
-    //         RegisterOrConstant16::Constant8(c) => Instruction::LoadC {
-    //             destination: dest.into(),
-    //             constant: c.into(),
-    //         },
-    //         RegisterOrConstant16::Constant16(c) => Instruction::LoadC {
-    //             destination: dest.into(),
-    //             constant: c,
-    //         },
-    //     }
-    // }
+    fn load(dest: Register, from: RegisterOrConstant16) -> Instruction {
+        match from {
+            RegisterOrConstant16::Protected(r) | RegisterOrConstant16::Temporary(r) => {
+                Instruction::LoadR {
+                    destination: dest.into(),
+                    from: r.into(),
+                }
+            }
+            RegisterOrConstant16::Constant8(c) => Instruction::LoadC {
+                destination: dest.into(),
+                constant: c.into(),
+            },
+            RegisterOrConstant16::Constant16(c) => Instruction::LoadC {
+                destination: dest.into(),
+                constant: c,
+            },
+        }
+    }
 
     fn neg(dest: Register, right: RegisterOrConstant16) -> Instruction {
         match right {
