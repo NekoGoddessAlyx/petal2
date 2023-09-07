@@ -635,7 +635,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         self.skip_nl();
         let block = self.push_node(Stat::Compound { len: RefLen(0) }, span);
         if let Some(root) = root {
-            self.push_ref_to_compound_stat(root, block);
+            self.push_ref_to_parent(root, block);
         }
 
         self.push_state(State::ContinueBlockStatement { block });
