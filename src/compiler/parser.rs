@@ -509,6 +509,13 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 if stats_len.0 == 0 {
                     self.nodes
                         .swap(block_expr.0 as usize, expression.0 as usize);
+                    self.ast_locations
+                        .swap(block_expr.0 as usize, expression.0 as usize);
+
+                    if expression.0 as usize == self.nodes.len().saturating_sub(1) {
+                        self.nodes.pop();
+                        self.ast_locations.pop();
+                    }
                 }
             }
             _ => todo!("Unexpected node"),
@@ -1032,6 +1039,12 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 self.on_error(&"Expected '}'", Some(self.peek_location()));
             }
         }
+
+        // match self.nodes[block.0 as usize] {
+        //     Node::Expr(Expr::Block { stats_len, ..}) => {
+        //         if stats_len.0 == 0 {}
+        //     }
+        // }
 
         // pop the last statement ref
         // expect an expression statement and extract the expression
