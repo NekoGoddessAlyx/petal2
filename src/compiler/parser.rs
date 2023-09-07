@@ -787,14 +787,32 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             Token::Sub => {
                 let op_span = self.peek_location();
                 self.advance();
-                self.push_state(State::EndPrefixExpression {
-                    precedence,
-                    span: op_span,
-                    op: UnOp::Neg,
-                });
-                self.push_state(State::BeginExpression {
-                    precedence: Precedence::Prefix,
-                });
+
+                self.skip_nl();
+                match *self.peek() {
+                    Token::Integer(v) => {
+                        let span = op_span.merge(self.peek_location());
+                        self.advance();
+                        let left = self.push_node(Expr::Integer(-v), span);
+                        self.push_state(State::BeginExpressionInfix { precedence, left });
+                    }
+                    Token::Float(v) => {
+                        let span = op_span.merge(self.peek_location());
+                        self.advance();
+                        let left = self.push_node(Expr::Float(-v), span);
+                        self.push_state(State::BeginExpressionInfix { precedence, left });
+                    }
+                    _ => {
+                        self.push_state(State::EndPrefixExpression {
+                            precedence,
+                            span: op_span,
+                            op: UnOp::Neg,
+                        });
+                        self.push_state(State::BeginExpression {
+                            precedence: Precedence::Prefix,
+                        });
+                    }
+                }
             }
             Token::Integer(v) => {
                 let expr_span = self.peek_location();

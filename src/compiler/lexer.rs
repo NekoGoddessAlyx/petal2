@@ -69,6 +69,15 @@ pub struct Span {
     pub end: u32,
 }
 
+impl Span {
+    pub fn merge(self, other: Span) -> Self {
+        Self {
+            start: self.start.min(other.start),
+            end: self.start.max(other.end),
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct LineNumber(NonZeroU32);
 
