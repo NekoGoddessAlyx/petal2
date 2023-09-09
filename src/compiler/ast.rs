@@ -391,15 +391,21 @@ impl<S> AstBuilder<S> {
 
     pub fn patch_block_expr_tail(
         &mut self,
-        block_expr: NodeRef,
+        mut block_expr: NodeRef,
     ) -> std::result::Result<(), Option<Span>> {
-        match self.nodes.get(block_expr.get()) {
-            Some(Node::Expr(Expr::Block { stats_len, .. })) => {
-                if *stats_len == 0 {
-                    return Err(None);
-                }
-            }
+        // TODO: big ol bug
+        // this logic is just wrong
+        // the only way to truly get the last statement of this block expression
+        // is to walk the tree
+        // simply popping the ref won't work
+
+        let stats_len = match self.nodes.get(block_expr.get()) {
+            Some(Node::Expr(Expr::Block { stats_len, .. })) => *stats_len,
             _ => unreachable!("expected Expr::Block"),
+        };
+
+        if stats_len == 0 {
+            return Err(None);
         }
 
         let last_stat = match self.refs.pop() {
@@ -407,20 +413,34 @@ impl<S> AstBuilder<S> {
             None => return Err(None),
         };
 
-        let expr = match self.nodes.get_mut(last_stat.get()) {
+        let mut expr = match self.nodes.get_mut(last_stat.get()) {
             Some(Node::Stat(Stat::Expr { expr })) => *expr,
             _ => return Err(self.locations.get(last_stat.get()).copied()),
         };
 
-        match self.nodes.get_mut(block_expr.get()) {
-            Some(Node::Expr(Expr::Block {
-                stats_len,
-                tail_expr,
-            })) => {
-                *stats_len -= 1;
-                *tail_expr = expr;
+        match stats_len.get() {
+            1 => {
+                self.swap(&mut block_expr, &mut expr);
+                if block_expr.get().saturating_add(1) == self.nodes.len() {
+                    self.nodes.pop();
+                    self.locations.pop();
+                }
             }
-            _ => unreachable!("expected Expr::Block"),
+            _ => match self.nodes.get_mut(block_expr.get()) {
+                Some(Node::Expr(Expr::Block {
+                    stats_len,
+                    tail_expr,
+                })) => {
+                    *stats_len -= 1;
+                    *tail_expr = expr;
+                }
+                _ => unreachable!("expected Expr::Block"),
+            },
+        }
+
+        if last_stat.get().saturating_add(1) == self.nodes.len() {
+            self.nodes.pop();
+            self.locations.pop();
         }
 
         Ok(())
