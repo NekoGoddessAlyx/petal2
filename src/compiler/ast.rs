@@ -393,6 +393,15 @@ impl<S> AstBuilder<S> {
         &mut self,
         block_expr: NodeRef,
     ) -> std::result::Result<(), Option<Span>> {
+        match self.nodes.get(block_expr.get()) {
+            Some(Node::Expr(Expr::Block { stats_len, .. })) => {
+                if *stats_len == 0 {
+                    return Err(None);
+                }
+            }
+            _ => unreachable!("expected Expr::Block"),
+        }
+
         let last_stat = match self.refs.pop() {
             Some(last_stat) => last_stat,
             None => return Err(None),
