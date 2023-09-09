@@ -175,6 +175,249 @@ impl std::ops::Sub<u32> for RefLen {
     }
 }
 
+pub struct AstBuilder<S> {
+    nodes: Vec<Node<S>>,
+    refs: Vec<NodeRef>,
+    locations: Vec<Span>,
+}
+
+impl<S> AstBuilder<S> {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            nodes: Vec::with_capacity(capacity),
+            refs: Vec::with_capacity(capacity),
+            locations: Vec::with_capacity(capacity),
+        }
+    }
+
+    pub fn build(self) -> Ast<S> {
+        assert!(!self.nodes.is_empty(), "Nodes is empty");
+        assert!(!self.locations.is_empty(), "Locations is empty");
+        assert_eq!(
+            self.nodes.len(),
+            self.locations.len(),
+            "Mismatch between nodes and locations"
+        );
+
+        Ast {
+            nodes: self.nodes.into_boxed_slice(),
+            refs: self.refs.into_boxed_slice(),
+            locations: self.locations.into_boxed_slice(),
+        }
+    }
+
+    fn push<N: Into<Node<S>>>(&mut self, node: N, location: Span) -> NodeRef {
+        let index = self.nodes.len();
+        self.nodes.push(node.into());
+        self.locations.push(location);
+        NodeRef::new(index)
+    }
+
+    fn swap(&mut self, a: &mut NodeRef, b: &mut NodeRef) {
+        let a_index = a.get();
+        let b_index = b.get();
+        self.nodes.swap(a_index, b_index);
+        self.locations.swap(a_index, b_index);
+        std::mem::swap(a, b);
+    }
+
+    // statements
+
+    pub fn push_root<N: Into<Node<S>>>(&mut self, node: N, location: Span) -> NodeRef {
+        self.push(node, location)
+    }
+
+    pub fn patch_compound_stat(
+        &mut self,
+        compound_stat: NodeRef,
+        node: Stat<S>,
+        location: Span,
+    ) -> NodeRef {
+        let node = self.push(node, location);
+        self.refs.push(node);
+
+        match self.nodes.get_mut(compound_stat.get()) {
+            Some(Node::Stat(Stat::Compound { len })) => {
+                *len += 1;
+            }
+            _ => unreachable!("expected Stat::Compound"),
+        }
+
+        node
+    }
+
+    pub fn patch_var_decl_def(
+        &mut self,
+        var_decl: NodeRef,
+        node: Expr<S>,
+        location: Span,
+    ) -> NodeRef {
+        let node = self.push(node, location);
+
+        match self.nodes.get_mut(var_decl.get()) {
+            Some(Node::Stat(Stat::VarDecl { def, .. })) => {
+                *def = Some(node);
+            }
+            _ => unreachable!("expected Stat::VarDecl"),
+        }
+
+        node
+    }
+
+    pub fn patch_expr_stat(
+        &mut self,
+        expr_stat: NodeRef,
+        node: Expr<S>,
+        location: Span,
+    ) -> NodeRef {
+        let node = self.push(node, location);
+
+        match self.nodes.get_mut(expr_stat.get()) {
+            Some(Node::Stat(Stat::Expr { expr, .. })) => {
+                *expr = node;
+            }
+            _ => unreachable!("expected Stat::Expr"),
+        }
+
+        node
+    }
+
+    // expressions
+
+    pub fn patch_var_expr(&mut self, var_expr: NodeRef, node: Expr<S>, location: Span) -> NodeRef {
+        let node = self.push(node, location);
+
+        match self.nodes.get_mut(var_expr.get()) {
+            Some(Node::Expr(Expr::Var { assignment, .. })) => {
+                *assignment = Some(node);
+            }
+            _ => unreachable!("expected Expr::Var"),
+        }
+
+        node
+    }
+
+    pub fn patch_return_expr(
+        &mut self,
+        return_expr: NodeRef,
+        node: Expr<S>,
+        location: Span,
+    ) -> NodeRef {
+        let node = self.push(node, location);
+
+        match self.nodes.get_mut(return_expr.get()) {
+            Some(Node::Expr(Expr::Return { right })) => {
+                *right = Some(node);
+            }
+            _ => unreachable!("expected Expr::Return"),
+        }
+
+        node
+    }
+
+    pub fn patch_un_op_expr(
+        &mut self,
+        un_op_expr: NodeRef,
+        node: Expr<S>,
+        location: Span,
+    ) -> NodeRef {
+        let node = self.push(node, location);
+
+        match self.nodes.get_mut(un_op_expr.get()) {
+            Some(Node::Expr(Expr::UnOp { right, .. })) => {
+                *right = node;
+            }
+            _ => unreachable!("expected Expr::UnOp"),
+        }
+
+        node
+    }
+
+    pub fn patch_infix_expr<F: FnOnce(NodeRef) -> Expr<S>>(
+        &mut self,
+        mut left: NodeRef,
+        f: F,
+        location: Span,
+    ) -> NodeRef {
+        let mut node = self.push(Expr::Integer(0), location);
+
+        self.swap(&mut left, &mut node);
+        match self.nodes.get_mut(node.get()) {
+            Some(Node::Expr(bin)) => {
+                *bin = f(left);
+            }
+            _ => unreachable!("missing node"),
+        }
+
+        node
+    }
+
+    pub fn patch_bin_op_expr_right(
+        &mut self,
+        bin_op_expr: NodeRef,
+        node: Expr<S>,
+        location: Span,
+    ) -> NodeRef {
+        let node = self.push(node, location);
+
+        match self.nodes.get_mut(bin_op_expr.get()) {
+            Some(Node::Expr(Expr::BinOp { right, .. })) => {
+                *right = node;
+            }
+            _ => unreachable!("expected Expr::BinOp"),
+        }
+
+        node
+    }
+
+    pub fn patch_block_expr_stat(
+        &mut self,
+        block_expr: NodeRef,
+        node: Stat<S>,
+        location: Span,
+    ) -> NodeRef {
+        let node = self.push(node, location);
+        self.refs.push(node);
+
+        match self.nodes.get_mut(block_expr.get()) {
+            Some(Node::Expr(Expr::Block { stats_len, .. })) => {
+                *stats_len += 1;
+            }
+            _ => unreachable!("expected Expr::Block"),
+        }
+
+        node
+    }
+
+    pub fn patch_block_expr_tail(
+        &mut self,
+        block_expr: NodeRef,
+    ) -> std::result::Result<(), Option<Span>> {
+        let last_stat = match self.refs.pop() {
+            Some(last_stat) => last_stat,
+            None => return Err(None),
+        };
+
+        let expr = match self.nodes.get_mut(last_stat.get()) {
+            Some(Node::Stat(Stat::Expr { expr })) => *expr,
+            _ => return Err(self.locations.get(last_stat.get()).copied()),
+        };
+
+        match self.nodes.get_mut(block_expr.get()) {
+            Some(Node::Expr(Expr::Block {
+                stats_len,
+                tail_expr,
+            })) => {
+                *stats_len -= 1;
+                *tail_expr = expr;
+            }
+            _ => unreachable!("expected Expr::Block"),
+        }
+
+        Ok(())
+    }
+}
+
 // display
 
 struct AstPrettyPrinter<'formatter, 'ast, S> {
