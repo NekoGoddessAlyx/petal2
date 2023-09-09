@@ -136,6 +136,13 @@ where
     println!("Nodes: {:?}", ast.nodes);
     println!("Refs: {:?}", ast.refs);
     println!("Locations: {:?}", ast.locations);
+
+    println!("✨✨✨✨✨✨✨ Nodes (pretty) ✨✨✨✨✨✨✨");
+    for (i, n) in ast.nodes.iter().enumerate() {
+        println!("{}: {:?}", i, n);
+    }
+    println!("✨✨✨✨✨✨✨ -------------- ✨✨✨✨✨✨✨");
+
     println!("Ast (pretty): {}", ast);
 
     let ast = match sem_check(|message, at| callback(message, at), ast) {
