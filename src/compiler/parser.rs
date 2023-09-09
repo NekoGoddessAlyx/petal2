@@ -362,10 +362,8 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             .unwrap()
     }
 
-    fn advance(&mut self) -> Token<S> {
-        let token = self.tokens.get(self.cursor).cloned().unwrap_or(Token::Eof);
+    fn advance(&mut self) {
         self.cursor += 1;
-        token
     }
 
     fn end_of_statement(&mut self) {
