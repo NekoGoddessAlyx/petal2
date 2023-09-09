@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fmt::{Display, Error, Formatter, Write};
 
 use crate::compiler::lexer::Span;
@@ -110,10 +111,69 @@ pub enum BinOp {
 }
 
 #[derive(Copy, Clone, Default, PartialEq, Eq, Hash, Debug)]
-pub struct NodeRef(pub u32);
+#[repr(transparent)]
+pub struct NodeRef(u32);
 
-#[derive(Copy, Clone, Debug)]
-pub struct RefLen(pub u32);
+impl NodeRef {
+    #[inline]
+    pub fn new(value: usize) -> Self {
+        Self(value as u32)
+    }
+
+    #[inline]
+    pub fn get(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Copy, Clone, Default, PartialEq, Eq, Hash, Debug)]
+#[repr(transparent)]
+pub struct RefLen(u32);
+
+impl RefLen {
+    #[inline]
+    pub fn get(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl PartialEq<u32> for RefLen {
+    fn eq(&self, other: &u32) -> bool {
+        self.0.eq(other)
+    }
+}
+
+impl PartialOrd<u32> for RefLen {
+    fn partial_cmp(&self, other: &u32) -> Option<Ordering> {
+        self.0.partial_cmp(other)
+    }
+}
+
+impl std::ops::Add<u32> for RefLen {
+    type Output = Self;
+    fn add(self, rhs: u32) -> Self::Output {
+        Self(self.0 + rhs)
+    }
+}
+
+impl std::ops::AddAssign<u32> for RefLen {
+    fn add_assign(&mut self, rhs: u32) {
+        self.0 += rhs
+    }
+}
+
+impl std::ops::SubAssign<u32> for RefLen {
+    fn sub_assign(&mut self, rhs: u32) {
+        self.0 -= rhs
+    }
+}
+
+impl std::ops::Sub<u32> for RefLen {
+    type Output = Self;
+    fn sub(self, rhs: u32) -> Self::Output {
+        Self(self.0 - rhs)
+    }
+}
 
 // display
 
@@ -180,7 +240,7 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
     }
 
     fn get_node(&self, index: NodeRef) -> &'ast Node<S> {
-        &self.nodes[index.0 as usize]
+        &self.nodes[index.get()]
     }
 
     fn get_statement(&self, index: NodeRef) -> Result<&'ast Stat<S>> {
@@ -261,15 +321,15 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
     }
 
     fn continue_compound_stat(&mut self, len: RefLen) -> Result<()> {
-        match len.0 {
+        match len.get() {
             0 => {
                 self.unindent();
                 writeln!(self)?;
                 write!(self, "}}")?;
             }
             _ => {
-                let new_len = len.0 - 1;
-                self.push_state(State::ContinueCompoundStat(RefLen(new_len)));
+                let new_len = len - 1;
+                self.push_state(State::ContinueCompoundStat(new_len));
                 let next_statement = self.get_next_ref();
                 self.push_state(State::EnterStat(next_statement));
             }
@@ -346,9 +406,9 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
     }
 
     fn continue_block_expr(&mut self, len: RefLen) -> Result<()> {
-        if len.0 > 0 {
-            let new_len = len.0 - 1;
-            self.push_state(State::ContinueBlockExpr(RefLen(new_len)));
+        if len > 0 {
+            let new_len = len - 1;
+            self.push_state(State::ContinueBlockExpr(new_len));
 
             let next_statement = self.get_next_ref();
             self.push_state(State::EnterStat(next_statement));

@@ -457,18 +457,18 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         let index = self.nodes.len();
         self.nodes.push(node.into());
         self.ast_locations.push(location);
-        NodeRef(index as u32)
+        NodeRef::new(index)
     }
 
     // node patching
 
     fn push_ref_to_parent(&mut self, parent: NodeRef, child: NodeRef) {
-        match self.nodes.get_mut(parent.0 as usize) {
+        match self.nodes.get_mut(parent.get()) {
             Some(Node::Stat(Stat::Compound { len })) => {
-                len.0 += 1;
+                *len += 1;
             }
             Some(Node::Expr(Expr::Block { stats_len, .. })) => {
-                stats_len.0 += 1;
+                *stats_len += 1;
             }
             _ => todo!("Unexpected node"),
         }
@@ -477,7 +477,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     // todo: could probably switch to the insert and swap mechanic
     fn patch_var_decl_def(&mut self, var_decl: NodeRef, definition: Option<NodeRef>) {
-        match self.nodes.get_mut(var_decl.0 as usize) {
+        match self.nodes.get_mut(var_decl.get()) {
             Some(Node::Stat(Stat::VarDecl { def, .. })) => {
                 *def = definition;
             }
@@ -487,32 +487,29 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     // todo: could probably switch to the insert and swap mechanic
     fn patch_expr_stat(&mut self, expr_stat: NodeRef, expression: NodeRef) {
-        match self.nodes.get_mut(expr_stat.0 as usize) {
+        match self.nodes.get_mut(expr_stat.get()) {
             Some(Node::Stat(Stat::Expr { expr })) => {
                 *expr = expression;
-                self.ast_locations[expr_stat.0 as usize] =
-                    self.ast_locations[expression.0 as usize];
+                self.ast_locations[expr_stat.get()] = self.ast_locations[expression.get()];
             }
             _ => todo!("Unexpected node"),
         }
     }
 
     fn patch_block_expr(&mut self, block_expr: NodeRef, expression: NodeRef) {
-        match self.nodes.get_mut(block_expr.0 as usize) {
+        match self.nodes.get_mut(block_expr.get()) {
             Some(Node::Expr(Expr::Block {
                 stats_len,
                 tail_expr,
             })) => {
-                *stats_len = RefLen(stats_len.0 - 1);
+                *stats_len -= 1;
                 *tail_expr = expression;
 
-                if stats_len.0 == 0 {
-                    self.nodes
-                        .swap(block_expr.0 as usize, expression.0 as usize);
-                    self.ast_locations
-                        .swap(block_expr.0 as usize, expression.0 as usize);
+                if stats_len.get() == 0 {
+                    self.nodes.swap(block_expr.get(), expression.get());
+                    self.ast_locations.swap(block_expr.get(), expression.get());
 
-                    if expression.0 as usize == self.nodes.len().saturating_sub(1) {
+                    if expression.get() == self.nodes.len().saturating_sub(1) {
                         self.nodes.pop();
                         self.ast_locations.pop();
                     }
@@ -537,8 +534,8 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         // push "junk" to reserve a slot in the array
         // it will be replaced with properly initialized values in the end
         let b = self.push_node(Expr::Integer(0), Span::default());
-        let a_index = index.0 as usize;
-        let b_index = b.0 as usize;
+        let a_index = index.get();
+        let b_index = b.get();
 
         // swap the new allocation with the given index
         self.nodes.swap(a_index, b_index);
@@ -584,7 +581,12 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     // root
 
     fn begin_statements_root(&mut self) {
-        let root = self.push_node(Stat::Compound { len: RefLen(0) }, self.peek_location());
+        let root = self.push_node(
+            Stat::Compound {
+                len: RefLen::default(),
+            },
+            self.peek_location(),
+        );
         self.push_state(State::ContinueStatementsRoot { block: root });
         self.push_state(State::BeginStatement { parent: Some(root) });
     }
@@ -640,7 +642,12 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     fn begin_block_statement(&mut self, root: ParentNode, span: Span) {
         self.skip_nl();
-        let block = self.push_node(Stat::Compound { len: RefLen(0) }, span);
+        let block = self.push_node(
+            Stat::Compound {
+                len: RefLen::default(),
+            },
+            span,
+        );
         if let Some(root) = root {
             self.push_ref_to_parent(root, block);
         }
@@ -776,7 +783,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 self.advance();
                 let block = self.push_node(
                     Expr::Block {
-                        stats_len: RefLen(0),
+                        stats_len: RefLen::default(),
                         tail_expr: NodeRef::default(),
                     },
                     brace_span,
@@ -1040,7 +1047,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             }
         }
 
-        // match self.nodes[block.0 as usize] {
+        // match self.nodes[block.get()] {
         //     Node::Expr(Expr::Block { stats_len, ..}) => {
         //         if stats_len.0 == 0 {}
         //     }
@@ -1050,12 +1057,12 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         // expect an expression statement and extract the expression
         // patch the tail_expr part of the block expr
         match self.refs.pop() {
-            Some(expr_stat) => match self.nodes[expr_stat.0 as usize] {
+            Some(expr_stat) => match self.nodes[expr_stat.get()] {
                 Node::Stat(Stat::Expr { expr }) => {
                     self.patch_block_expr(block, expr);
                 }
                 _ => {
-                    let stat_span = self.ast_locations[expr_stat.0 as usize];
+                    let stat_span = self.ast_locations[expr_stat.get()];
                     self.on_error(&"Expected expression", Some(stat_span));
                 }
             },

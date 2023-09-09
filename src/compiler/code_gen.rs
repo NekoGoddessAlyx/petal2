@@ -52,7 +52,7 @@ pub fn code_gen<I: StringInterner<String = PString>>(
         current_function,
     };
 
-    let root = NodeRef(0);
+    let root = NodeRef::default();
     code_gen.push_state(State::EnterStat(root));
 
     code_gen.visit()?;
@@ -249,7 +249,7 @@ struct CodeGen<'ast, I: StringInterner<String = PString>> {
 
 impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     fn get_node(&self, index: NodeRef) -> &'ast Node {
-        &self.nodes[index.0 as usize]
+        &self.nodes[index.get()]
     }
 
     fn get_statement(&self, index: NodeRef) -> Result<&'ast Stat> {
@@ -461,9 +461,9 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     }
 
     fn continue_compound_statement(&mut self, len: RefLen) -> Result<()> {
-        if len.0 > 0 {
-            let new_len = len.0 - 1;
-            self.push_state(State::ContinueCompoundStat(RefLen(new_len)));
+        if len > 0 {
+            let new_len = len - 1;
+            self.push_state(State::ContinueCompoundStat(new_len));
 
             let next_statement = self.get_next_ref();
             self.push_state(State::EnterStat(next_statement));
@@ -710,9 +710,9 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     }
 
     fn continue_block_expr(&mut self, len: RefLen) -> Result<()> {
-        if len.0 > 0 {
-            let new_len = len.0 - 1;
-            self.push_state(State::ContinueBlockExpr(RefLen(new_len)));
+        if len > 0 {
+            let new_len = len - 1;
+            self.push_state(State::ContinueBlockExpr(new_len));
 
             let next_statement = self.get_next_ref();
             self.push_state(State::EnterStat(next_statement));

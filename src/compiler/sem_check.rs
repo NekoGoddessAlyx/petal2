@@ -82,7 +82,7 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast<S>) -> Res
         scopes: vec![],
         num_locals: 0,
     });
-    let root = NodeRef(0);
+    let root = NodeRef::default();
     sem_check.push_state(State::EnterStat(root));
 
     sem_check.visit()?;
@@ -186,7 +186,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     }
 
     fn get_node(&self, index: NodeRef) -> &'ast Node<S> {
-        &self.nodes[index.0 as usize]
+        &self.nodes[index.get()]
     }
 
     fn get_statement(&self, index: NodeRef) -> Result<&'ast Stat<S>> {
@@ -210,7 +210,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     }
 
     fn get_location(&self, index: NodeRef) -> Span {
-        self.locations[index.0 as usize]
+        self.locations[index.get()]
     }
 
     fn push_state(&mut self, state: State) {
@@ -359,9 +359,9 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     }
 
     fn continue_compound_statement(&mut self, len: RefLen) -> Result<()> {
-        if len.0 > 0 {
-            let new_len = len.0 - 1;
-            self.push_state(State::ContinueCompoundStat(RefLen(new_len)));
+        if len > 0 {
+            let new_len = len - 1;
+            self.push_state(State::ContinueCompoundStat(new_len));
 
             let next_statement = self.get_next_ref();
             self.push_state(State::EnterStat(next_statement));
@@ -439,9 +439,9 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     }
 
     fn continue_block_expr(&mut self, len: RefLen) -> Result<()> {
-        if len.0 > 0 {
-            let new_len = len.0 - 1;
-            self.push_state(State::ContinueBlockExpr(RefLen(new_len)));
+        if len > 0 {
+            let new_len = len - 1;
+            self.push_state(State::ContinueBlockExpr(new_len));
 
             let next_statement = self.get_next_ref();
             self.push_state(State::EnterStat(next_statement));
