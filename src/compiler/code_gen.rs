@@ -409,7 +409,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     fn enter_statement(&mut self, node: NodeRef) -> Result<()> {
         let statement = self.get_statement(node)?;
         match statement {
-            Stat::Compound { len } => {
+            Stat::Compound { len, .. } => {
                 let stack_top = self.current_function.registers.stack_top();
                 self.push_state(State::ExitCompoundStat(stack_top));
                 self.push_state(State::ContinueCompoundStat(*len));
@@ -618,6 +618,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
             Expr::Block {
                 stats_len,
                 tail_expr,
+                ..
             } => {
                 let stack_top = self.current_function.registers.stack_top();
                 self.push_state(State::ExitBlockExpr(stack_top, dest));

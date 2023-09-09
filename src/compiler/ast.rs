@@ -54,6 +54,9 @@ impl<S> From<Expr<S>> for Node<S> {
 pub enum Stat<S> {
     Compound {
         len: RefLen,
+        /// Double-indirection reference to the index of the reference of the last statement
+        /// Used exclusively by the parser and has no meaning outside of it
+        last_stat: usize,
     },
     VarDecl {
         mutability: Mutability,
@@ -93,6 +96,9 @@ pub enum Expr<S> {
     },
     Block {
         stats_len: RefLen,
+        /// Double-indirection reference to the index of the reference of the last statement
+        /// Used exclusively by the parser and has no meaning outside of it
+        last_stat: usize,
         tail_expr: NodeRef,
     },
 }
@@ -237,8 +243,9 @@ impl<S> AstBuilder<S> {
         self.refs.push(node);
 
         match self.nodes.get_mut(compound_stat.get()) {
-            Some(Node::Stat(Stat::Compound { len })) => {
+            Some(Node::Stat(Stat::Compound { len, last_stat })) => {
                 *len += 1;
+                *last_stat = self.refs.len().saturating_sub(1);
             }
             _ => unreachable!("expected Stat::Compound"),
         }
@@ -380,8 +387,13 @@ impl<S> AstBuilder<S> {
         self.refs.push(node);
 
         match self.nodes.get_mut(block_expr.get()) {
-            Some(Node::Expr(Expr::Block { stats_len, .. })) => {
+            Some(Node::Expr(Expr::Block {
+                stats_len,
+                last_stat,
+                ..
+            })) => {
                 *stats_len += 1;
+                *last_stat = self.refs.len().saturating_sub(1);
             }
             _ => unreachable!("expected Expr::Block"),
         }
@@ -391,56 +403,98 @@ impl<S> AstBuilder<S> {
 
     pub fn patch_block_expr_tail(
         &mut self,
-        mut block_expr: NodeRef,
+        block_expr: NodeRef,
     ) -> std::result::Result<(), Option<Span>> {
-        // TODO: big ol bug
-        // this logic is just wrong
-        // the only way to truly get the last statement of this block expression
-        // is to walk the tree
-        // simply popping the ref won't work
+        // ~~~~~ UNHOLINESS BELOW ~~~~~
 
-        let stats_len = match self.nodes.get(block_expr.get()) {
-            Some(Node::Expr(Expr::Block { stats_len, .. })) => *stats_len,
-            _ => unreachable!("expected Expr::Block"),
-        };
+        // A NodeRef that points to a BlockExpr
+        // Nested blocks will be iteratively flattened from statements to expressions
+        let mut current_block_expr = Some(block_expr);
+        let mut depth = 0;
 
-        if stats_len == 0 {
-            return Err(None);
-        }
-
-        let last_stat = match self.refs.pop() {
-            Some(last_stat) => last_stat,
-            None => return Err(None),
-        };
-
-        let mut expr = match self.nodes.get_mut(last_stat.get()) {
-            Some(Node::Stat(Stat::Expr { expr })) => *expr,
-            _ => return Err(self.locations.get(last_stat.get()).copied()),
-        };
-
-        match stats_len.get() {
-            1 => {
-                self.swap(&mut block_expr, &mut expr);
-                if block_expr.get().saturating_add(1) == self.nodes.len() {
-                    self.nodes.pop();
-                    self.locations.pop();
-                }
-            }
-            _ => match self.nodes.get_mut(block_expr.get()) {
+        while let Some(mut block_expr) = current_block_expr.take() {
+            // Obtain the length and reference to the last statement
+            // Length will be non-zero
+            let (stats_len, last_stat) = match self.nodes.get(block_expr.get()) {
                 Some(Node::Expr(Expr::Block {
                     stats_len,
-                    tail_expr,
+                    last_stat,
+                    ..
                 })) => {
-                    *stats_len -= 1;
-                    *tail_expr = expr;
+                    if *stats_len == 0 {
+                        return Err(self.locations.get(block_expr.get()).copied());
+                    }
+
+                    (*stats_len, *last_stat)
                 }
                 _ => unreachable!("expected Expr::Block"),
-            },
-        }
+            };
 
-        if last_stat.get().saturating_add(1) == self.nodes.len() {
-            self.nodes.pop();
-            self.locations.pop();
+            // Unfortunately, a ref will need to be removed
+            // from a possibly arbitrary place in the array
+            // Get the node it points to, adjusted by depth
+            // as refs are being removed throughout the process
+            // successive "last_stat" pointers should always be
+            // greater than the previous one, making this safe
+            let last_stat = self.refs.remove(last_stat - depth);
+            depth += 1;
+
+            // scratch variable to avoid borrowing from self
+            let mut scratch;
+
+            let tail = match self.nodes.get(last_stat.get()) {
+                Some(&Node::Stat(Stat::Compound {
+                    len,
+                    last_stat: stat,
+                })) => {
+                    // Transform compound statements into block expressions in-place
+                    // Set it as the current_block_expr so that it can be flattened
+                    *self.nodes.get_mut(last_stat.get()).unwrap() = Node::Expr(Expr::Block {
+                        stats_len: len,
+                        last_stat: stat,
+                        tail_expr: NodeRef::default(),
+                    });
+                    current_block_expr.insert(last_stat)
+                }
+                Some(&Node::Stat(Stat::Expr { expr })) => {
+                    scratch = expr;
+                    &mut scratch
+                }
+                _ => return Err(self.locations.get(last_stat.get()).copied()),
+            };
+
+            match stats_len.get() {
+                1 => {
+                    // length of 1, swap the block expression with the tail
+                    self.swap(&mut block_expr, tail);
+                    // try to remove the block expression if possible
+                    // may be junk as it can't be safely removed
+                    // this is fine as long as nothing references it
+                    // (which after the swap, nothing does)
+                    if block_expr.get().saturating_add(1) == self.nodes.len() {
+                        self.nodes.pop();
+                        self.locations.pop();
+                    }
+                }
+                _ => match self.nodes.get_mut(block_expr.get()) {
+                    Some(Node::Expr(Expr::Block {
+                        stats_len,
+                        tail_expr,
+                        ..
+                    })) => {
+                        *stats_len -= 1;
+                        *tail_expr = *tail;
+                    }
+                    _ => unreachable!("expected Expr::Block"),
+                },
+            }
+
+            // attempt to remove the last statement node if possible,
+            // it is now junk
+            if last_stat.get().saturating_add(1) == self.nodes.len() {
+                self.nodes.pop();
+                self.locations.pop();
+            }
         }
 
         Ok(())
@@ -565,7 +619,7 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
 
         let statement = self.get_statement(node)?;
         match statement {
-            Stat::Compound { len } => {
+            Stat::Compound { len, .. } => {
                 write!(self, "{{")?;
                 self.indent();
                 self.push_state(State::ContinueCompoundStat(*len));
@@ -649,6 +703,7 @@ impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
             Expr::Block {
                 stats_len,
                 tail_expr,
+                ..
             } => {
                 write!(self, "{{")?;
                 self.indent();

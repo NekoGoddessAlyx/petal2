@@ -312,7 +312,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     fn enter_statement(&mut self, node: NodeRef) -> Result<()> {
         let statement = self.get_statement(node)?;
         match statement {
-            Stat::Compound { len } => {
+            Stat::Compound { len, .. } => {
                 self.begin_scope()?;
 
                 self.push_state(State::ExitStat(node));
@@ -429,6 +429,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
             Expr::Block {
                 stats_len,
                 tail_expr,
+                ..
             } => {
                 self.push_state(State::EnterExpr(*tail_expr));
                 self.push_state(State::ContinueBlockExpr(*stats_len));

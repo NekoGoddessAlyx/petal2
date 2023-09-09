@@ -441,6 +441,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         let root = self.ast.push_root(
             Stat::Compound {
                 len: RefLen::default(),
+                last_stat: 0,
             },
             location,
         );
@@ -492,6 +493,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             push_stat,
             Stat::Compound {
                 len: RefLen::default(),
+                last_stat: 0,
             },
             brace_location,
         );
@@ -623,6 +625,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                     push_expr,
                     Expr::Block {
                         stats_len: RefLen::default(),
+                        last_stat: 0,
                         tail_expr: NodeRef::default(),
                     },
                     brace_location,
