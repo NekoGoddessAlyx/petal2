@@ -706,6 +706,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         let dest = self.allocate(dest)?;
         let instruction = match op {
             UnOp::Neg => Instruction::neg(dest.into(), right),
+            UnOp::Not => Instruction::not(dest.into(), right),
         };
         self.push_instruction(instruction);
         self.push_state(State::ExitExpr(dest.into()));
@@ -952,6 +953,25 @@ impl Instruction {
                 right: c.into(),
             },
             RegisterOrConstant16::Constant16(c) => Instruction::NegC {
+                destination: dest.into(),
+                right: c,
+            },
+        }
+    }
+
+    fn not(dest: Register, right: RegisterOrConstant16) -> Instruction {
+        match right {
+            RegisterOrConstant16::Protected(r) | RegisterOrConstant16::Temporary(r) => {
+                Instruction::NotR {
+                    destination: dest.into(),
+                    right: r.into(),
+                }
+            }
+            RegisterOrConstant16::Constant8(c) => Instruction::NotC {
+                destination: dest.into(),
+                right: c.into(),
+            },
+            RegisterOrConstant16::Constant16(c) => Instruction::NotC {
                 destination: dest.into(),
                 right: c,
             },

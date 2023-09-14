@@ -683,6 +683,17 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                     }
                 }
             }
+            Token::Bang => {
+                let op_location = self.peek_location();
+                self.advance();
+
+                let left =
+                    self.push_expression(push_expr, Expr::UnOp { op: UnOp::Not }, op_location);
+                self.push_state(State::BeginExpression {
+                    push_expr: PushExpr::UnOpExprRight(left),
+                    precedence: Precedence::Prefix,
+                });
+            }
             Token::Integer(v) => {
                 let expr_location = self.peek_location();
                 self.advance();
@@ -869,6 +880,7 @@ impl<S> Token<S> {
             | Token::False
             | Token::BraceOpen
             | Token::ParenOpen
+            | Token::Bang
             | Token::Integer(_)
             | Token::Float(_)
             | Token::Identifier(_) => true,

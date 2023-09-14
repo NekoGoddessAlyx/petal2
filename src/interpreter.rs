@@ -1,6 +1,7 @@
 use crate::prototype::{Instruction, Prototype};
 use crate::value::{TypeError, Value};
 
+#[derive(Debug)]
 pub enum InterpretResult {
     TypeError(TypeError),
 }
@@ -67,6 +68,9 @@ pub fn interpret(function: Prototype) -> Result<Value, InterpretResult> {
 
                 Instruction::NegR { destination, right } => mov!(destination, (-peek!(right))?),
                 Instruction::NegC { destination, right } => mov!(destination, (-constant!(right))?),
+
+                Instruction::NotR { destination, right } => mov!(destination, (!peek!(right))?),
+                Instruction::NotC { destination, right } => mov!(destination, (!constant!(right))?),
 
                 Instruction::AddRR {
                     destination,

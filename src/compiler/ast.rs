@@ -86,6 +86,7 @@ pub enum Expr<S> {
 #[derive(Copy, Clone, Debug)]
 pub enum UnOp {
     Neg,
+    Not,
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -626,6 +627,7 @@ mod display {
                         Expr::UnOp { op } => {
                             match op {
                                 UnOp::Neg => write!(self, "-")?,
+                                UnOp::Not => write!(self, "!")?,
                             };
                             self.push_state(State::EnterExpr);
                         }

@@ -25,8 +25,8 @@ fn main() {
         Ok(result) => {
             println!("Result: {:?}", result);
         }
-        Err(_error) => {
-            println!("Error occurred while interpreting");
+        Err(error) => {
+            println!("Error occurred while interpreting: {:?}", error);
         }
     }
 }

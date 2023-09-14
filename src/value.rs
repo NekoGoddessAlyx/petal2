@@ -47,18 +47,30 @@ impl Hash for Value {
     }
 }
 
+#[derive(Debug)]
 pub struct TypeError;
 
 impl std::ops::Neg for Value {
     type Output = Result<Self, TypeError>;
 
     fn neg(self) -> Self::Output {
-        match self {
-            Value::Null => Err(TypeError),
-            Value::Boolean(_) => Err(TypeError),
-            Value::Integer(v) => Ok(Value::Integer(-v)),
-            Value::Float(v) => Ok(Value::Float(-v)),
-        }
+        Ok(match self {
+            Value::Integer(v) => Value::Integer(-v),
+            Value::Float(v) => Value::Float(-v),
+            _ => return Err(TypeError),
+        })
+    }
+}
+
+impl std::ops::Not for Value {
+    type Output = Result<Self, TypeError>;
+
+    fn not(self) -> Self::Output {
+        Ok(match self {
+            Value::Null => Value::Boolean(true),
+            Value::Boolean(v) => Value::Boolean(!v),
+            _ => Value::Boolean(false),
+        })
     }
 }
 

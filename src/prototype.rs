@@ -44,6 +44,15 @@ pub enum Instruction {
         right: CIndex16,
     },
 
+    NotR {
+        destination: RIndex,
+        right: RIndex,
+    },
+    NotC {
+        destination: RIndex,
+        right: CIndex16,
+    },
+
     AddRR {
         destination: RIndex,
         left: RIndex,
