@@ -262,8 +262,7 @@ impl<S: CompileString> AstBuilder<S> {
         node: Expr<S>,
         location: Span,
     ) -> NodeRef {
-        let node = self.push(node, location);
-        node
+        self.push(node, location)
     }
 
     // expressions
@@ -305,8 +304,7 @@ impl<S: CompileString> AstBuilder<S> {
         node: Expr<S>,
         location: Span,
     ) -> NodeRef {
-        let node = self.push(node, location);
-        node
+        self.push(node, location)
     }
 
     pub fn patch_infix_expr<N: Into<Node<S>>>(
@@ -315,8 +313,7 @@ impl<S: CompileString> AstBuilder<S> {
         node: N,
         location: Span,
     ) -> NodeRef {
-        let node = self.insert(left, node.into(), location);
-        node
+        self.insert(left, node.into(), location)
     }
 
     pub fn patch_bin_op_expr_right(
@@ -325,8 +322,7 @@ impl<S: CompileString> AstBuilder<S> {
         node: Expr<S>,
         location: Span,
     ) -> NodeRef {
-        let node = self.push(node, location);
-        node
+        self.push(node, location)
     }
 
     pub fn patch_block_expr_stat(
