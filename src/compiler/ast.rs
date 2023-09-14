@@ -77,7 +77,7 @@ pub enum Expr<S> {
     Var { name: S, assignment: bool },
     Return { right: bool },
     UnOp { op: UnOp },
-    BinOp { op: BinOp },
+    BinOp { op: BinOp, len: u32 },
     Block { len: RefLen, last_stat: NodeRef },
 }
 
@@ -86,7 +86,7 @@ pub enum UnOp {
     Neg,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum BinOp {
     Add,
     Sub,
@@ -313,7 +313,23 @@ impl<S: CompileString> AstBuilder<S> {
         node: N,
         location: Span,
     ) -> NodeRef {
-        self.insert(left, node.into(), location)
+        let node = node.into();
+        match (self.nodes.get_mut(left.get()), node) {
+            (
+                Some(Node::Expr(Expr::BinOp {
+                    op: op_a,
+                    len: len_a,
+                })),
+                Node::Expr(Expr::BinOp {
+                    op: op_b,
+                    len: len_b,
+                }),
+            ) if *op_a == op_b => {
+                *len_a += len_b;
+                left
+            }
+            (_, node) => self.insert(left, node, location),
+        }
     }
 
     pub fn patch_bin_op_expr_right(
@@ -608,9 +624,11 @@ mod display {
                             };
                             self.push_state(State::EnterExpr);
                         }
-                        Expr::BinOp { op } => {
-                            write!(self, "(")?;
-                            self.push_state(State::ContinueBinOp(op));
+                        Expr::BinOp { op, len } => {
+                            for _ in 0..len {
+                                write!(self, "(")?;
+                                self.push_state(State::ContinueBinOp(op));
+                            }
                             self.push_state(State::EnterExpr);
                         }
                         Expr::Block { len, .. } => {

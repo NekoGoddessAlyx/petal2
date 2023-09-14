@@ -333,8 +333,10 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                     Expr::UnOp { .. } => {
                         self.push_state(State::EnterExpr);
                     }
-                    Expr::BinOp { .. } => {
-                        self.push_state(State::EnterExpr);
+                    Expr::BinOp { len, .. } => {
+                        for _ in 0..len {
+                            self.push_state(State::EnterExpr);
+                        }
                         self.push_state(State::EnterExpr);
                     }
                     Expr::Block { len, .. } => {

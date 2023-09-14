@@ -638,8 +638,10 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
                 Ok(())
             }
-            Expr::BinOp { op } => {
-                self.push_state(State::ContinueBinaryExpr(op, dest));
+            Expr::BinOp { op, len } => {
+                for _ in 0..len {
+                    self.push_state(State::ContinueBinaryExpr(op, dest));
+                }
                 self.push_state(State::EnterExprAnywhere);
 
                 Ok(())

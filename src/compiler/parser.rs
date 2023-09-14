@@ -728,7 +728,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             self.advance();
             let left = self
                 .ast
-                .patch_infix_expr(left, Expr::BinOp { op }, next_location);
+                .patch_infix_expr(left, Expr::BinOp { op, len: 1 }, next_location);
             self.push_state(State::BeginExpressionInfix { precedence, left });
             self.push_state(State::BeginExpression {
                 push_expr: PushExpr::BinExprRight(left),
