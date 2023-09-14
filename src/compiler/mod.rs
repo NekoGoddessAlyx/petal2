@@ -156,6 +156,7 @@ where
             return Err(());
         }
     };
+    println!("Bindings: {:?}", ast.bindings);
 
     match code_gen(ast, strings) {
         Ok(prototype) => Ok(prototype),
