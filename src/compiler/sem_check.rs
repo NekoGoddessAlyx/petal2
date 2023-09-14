@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
+use smallvec::{smallvec, SmallVec};
+
 use crate::compiler::ast::{Ast, Expr, Mutability, Node, NodeRef, RefLen, Root, Stat};
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::Span;
@@ -74,9 +76,9 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast<S>) -> Res
         locations: &ast.locations,
         cursor: 0,
 
-        state: Vec::with_capacity(32),
+        state: smallvec![],
 
-        contexts: Vec::with_capacity(1),
+        contexts: smallvec![],
         bindings: HashMap::new(),
     };
 
@@ -122,9 +124,9 @@ struct SemCheck<'ast, C, S> {
     locations: &'ast [Span],
     cursor: usize,
 
-    state: Vec<State>,
+    state: SmallVec<[State; 32]>,
 
-    contexts: Vec<Context<S>>,
+    contexts: SmallVec<[Context<S>; 16]>,
     bindings: HashMap<NodeRef, Rc<Binding<S>>>,
 }
 

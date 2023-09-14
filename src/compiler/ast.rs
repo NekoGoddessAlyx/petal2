@@ -426,6 +426,8 @@ impl<S: CompileString> AstBuilder<S> {
 mod display {
     use std::fmt::{Display, Error, Formatter, Write};
 
+    use smallvec::{smallvec, SmallVec};
+
     use crate::compiler::ast::{Ast, BinOp, Expr, Mutability, Node, RefLen, Root, Stat, UnOp};
     use crate::pretty_formatter::PrettyFormatter;
 
@@ -433,8 +435,7 @@ mod display {
         let mut pretty_formatter = AstPrettyPrinter {
             f: PrettyFormatter::new(f),
             nodes: ast.nodes.iter(),
-            // todo small vec?
-            state: Vec::with_capacity(32),
+            state: smallvec![],
         };
         pretty_formatter.push_state(State::EnterRoot);
         match pretty_formatter.visit() {
@@ -492,7 +493,7 @@ mod display {
     pub struct AstPrettyPrinter<'formatter, I> {
         f: PrettyFormatter<'formatter>,
         nodes: I,
-        state: Vec<State>,
+        state: SmallVec<[State; 16]>,
     }
 
     impl<I> Write for AstPrettyPrinter<'_, I> {

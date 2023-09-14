@@ -3,6 +3,8 @@ use std::num::NonZeroU32;
 use std::ops::RangeInclusive;
 use std::str::{from_utf8, FromStr};
 
+use smallvec::{smallvec, SmallVec};
+
 use crate::compiler::string::{CompileString, NewString};
 
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -158,7 +160,7 @@ where
     let mut lexer = Lexer {
         source,
         new_string,
-        buffer: Vec::with_capacity(16),
+        buffer: smallvec![],
         cursor: Span { start: 0, end: 0 },
         line_cursor: Span { start: 0, end: 0 },
         line_number: 1,
@@ -203,7 +205,7 @@ where
 struct Lexer<'source, NS, S> {
     source: &'source [u8],
     new_string: NS,
-    buffer: Vec<u8>,
+    buffer: SmallVec<[u8; 16]>,
     cursor: Span,
     line_cursor: Span,
     line_number: u32,

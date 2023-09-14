@@ -2,6 +2,8 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use smallvec::{smallvec, SmallVec};
+
 use crate::compiler::ast::{BinOp, NodeRef, RefLen, Root, UnOp};
 use crate::compiler::registers::{Register, Registers};
 use crate::prototype::{CIndex16, CIndex8, Instruction, Prototype, RIndex};
@@ -49,7 +51,7 @@ pub fn code_gen<I: StringInterner<String = PString>>(
 
         strings,
 
-        state: Vec::with_capacity(32),
+        state: smallvec![],
 
         current_function,
     };
@@ -246,7 +248,7 @@ struct CodeGen<'ast, I: StringInterner<String = PString>> {
 
     strings: I,
 
-    state: Vec<State>,
+    state: SmallVec<[State; 32]>,
 
     current_function: PrototypeBuilder,
 }

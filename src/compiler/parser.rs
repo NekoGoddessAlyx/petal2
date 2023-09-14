@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use smallvec::{smallvec, SmallVec};
+
 use crate::compiler::ast::{Ast, AstBuilder, BinOp, Mutability, NodeRef, Root, Stat, UnOp};
 use crate::compiler::ast::{Expr, RefLen};
 use crate::compiler::callback::Callback;
@@ -37,7 +39,7 @@ pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(
         tokens,
         locations,
         cursor: 0,
-        state: Vec::with_capacity(32),
+        state: smallvec![],
         ast: AstBuilder::new(tokens.len()),
     };
 
@@ -291,7 +293,7 @@ struct Parser<'tokens, C, NS, S> {
     tokens: &'tokens [Token<S>],
     locations: &'tokens [Span],
     cursor: usize,
-    state: Vec<State>,
+    state: SmallVec<[State; 32]>,
     ast: AstBuilder<S>,
 }
 
