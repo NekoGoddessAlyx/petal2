@@ -291,8 +291,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                     }
                 }
                 State::EnterExpr => match *self.next_expr()? {
-                    Expr::Integer(_) => {}
-                    Expr::Float(_) => {}
+                    Expr::Null | Expr::Bool(_) | Expr::Integer(_) | Expr::Float(_) => {}
                     Expr::Var {
                         ref name,
                         assignment,

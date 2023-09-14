@@ -30,6 +30,9 @@ pub enum Token<S> {
     Val,
     Var,
     Return,
+    Null,
+    True,
+    False,
 
     BraceOpen,
     BraceClose,
@@ -393,6 +396,15 @@ where
             }
             b"return" => {
                 self.push_token(Token::Return);
+            }
+            b"null" => {
+                self.push_token(Token::Null);
+            }
+            b"true" => {
+                self.push_token(Token::True);
+            }
+            b"false" => {
+                self.push_token(Token::False);
             }
             _ => {
                 let string = (self.new_string)(string);

@@ -72,6 +72,8 @@ pub enum Mutability {
 
 #[derive(Debug)]
 pub enum Expr<S> {
+    Null,
+    Bool(bool),
     Integer(i64),
     Float(f64),
     Var { name: S, assignment: bool },
@@ -599,6 +601,9 @@ mod display {
                         }
                     }
                     State::EnterExpr => match *self.next_expr()? {
+                        Expr::Null => write!(self, "null")?,
+                        Expr::Bool(true) => write!(self, "true")?,
+                        Expr::Bool(false) => write!(self, "false")?,
                         Expr::Integer(v) => write!(self, "{}", v)?,
                         Expr::Float(v) => write!(self, "{}", v)?,
                         Expr::Var {

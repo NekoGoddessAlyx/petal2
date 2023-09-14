@@ -613,6 +613,24 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                     })
                 }
             }
+            Token::Null => {
+                let expr_location = self.peek_location();
+                self.advance();
+                let left = self.push_expression(push_expr, Expr::Null, expr_location);
+                self.push_state(State::BeginExpressionInfix { precedence, left });
+            }
+            Token::True => {
+                let expr_location = self.peek_location();
+                self.advance();
+                let left = self.push_expression(push_expr, Expr::Bool(true), expr_location);
+                self.push_state(State::BeginExpressionInfix { precedence, left });
+            }
+            Token::False => {
+                let expr_location = self.peek_location();
+                self.advance();
+                let left = self.push_expression(push_expr, Expr::Bool(false), expr_location);
+                self.push_state(State::BeginExpressionInfix { precedence, left });
+            }
             Token::BraceOpen => {
                 let brace_location = self.peek_location();
                 self.advance();
@@ -846,6 +864,9 @@ impl<S> Token<S> {
         #[allow(clippy::match_like_matches_macro)]
         match self {
             Token::Return
+            | Token::Null
+            | Token::True
+            | Token::False
             | Token::BraceOpen
             | Token::ParenOpen
             | Token::Integer(_)
