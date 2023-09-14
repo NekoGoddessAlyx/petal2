@@ -1,6 +1,7 @@
 use std::fmt::{Display, Formatter};
 use std::str::from_utf8;
 
+use crate::compiler::ast::Node;
 use crate::compiler::code_gen::code_gen;
 use crate::compiler::lexer::{lex, Source, Span};
 use crate::compiler::parser::parse;
@@ -135,6 +136,10 @@ where
     };
     println!("Nodes: {:?}", ast.nodes);
     println!("Locations: {:?}", ast.locations);
+    println!(
+        "Nodes (mem): {}",
+        std::mem::size_of::<Node<PString>>() * ast.nodes.len()
+    );
 
     println!("✨✨✨✨✨✨✨ Nodes (pretty) ✨✨✨✨✨✨✨");
     for (i, n) in ast.nodes.iter().enumerate() {
