@@ -1,42 +1,37 @@
 use std::cmp::Ordering;
-use std::fmt::{Display, Error, Formatter, Write};
+use std::fmt::{Display, Formatter};
 
+use crate::compiler::ast::display::write_ast;
 use crate::compiler::lexer::Span;
-use crate::pretty_formatter::PrettyFormatter;
+use crate::compiler::string::CompileString;
 
 #[derive(Debug)]
 pub struct Ast<S> {
     pub nodes: Box<[Node<S>]>,
-    pub refs: Box<[NodeRef]>,
     pub locations: Box<[Span]>,
 }
 
 impl<S: Display> Display for Ast<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut pretty_printer = AstPrettyPrinter::new(self, f);
-
-        let root = NodeRef(0);
-        pretty_printer.push_state(State::EnterStat(root));
-
-        match pretty_printer.visit() {
-            Ok(_) => Ok(()),
-            Err(PrinterErr::UnexpectedNode) => {
-                write!(f, "<error occurred while visiting ast>")?;
-                Ok(())
-            }
-            Err(PrinterErr::WriteErr(err)) => Err(err),
-        }
+        write_ast(self, f)
     }
 }
 
 #[derive(Debug)]
 pub enum Node<S> {
+    Root(Root),
     Stat(Stat<S>),
     Expr(Expr<S>),
 }
 
 // Assume string type is sized as u64
-static_assert_size!(Node<u64>, 32);
+static_assert_size!(Node<u64>, 24);
+
+impl<S> From<Root> for Node<S> {
+    fn from(value: Root) -> Self {
+        Node::Root(value)
+    }
+}
 
 impl<S> From<Stat<S>> for Node<S> {
     fn from(value: Stat<S>) -> Self {
@@ -51,21 +46,22 @@ impl<S> From<Expr<S>> for Node<S> {
 }
 
 #[derive(Debug)]
+pub enum Root {
+    Statements,
+}
+
+#[derive(Debug)]
 pub enum Stat<S> {
     Compound {
         len: RefLen,
-        /// Double-indirection reference to the index of the reference of the last statement
-        /// Used exclusively by the parser and has no meaning outside of it
-        last_stat: usize,
+        last_stat: NodeRef,
     },
     VarDecl {
         mutability: Mutability,
         name: S,
-        def: Option<NodeRef>,
+        def: bool,
     },
-    Expr {
-        expr: NodeRef,
-    },
+    Expr,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -78,29 +74,11 @@ pub enum Mutability {
 pub enum Expr<S> {
     Integer(i64),
     Float(f64),
-    Var {
-        name: S,
-        assignment: Option<NodeRef>,
-    },
-    Return {
-        right: Option<NodeRef>,
-    },
-    UnOp {
-        op: UnOp,
-        right: NodeRef,
-    },
-    BinOp {
-        op: BinOp,
-        left: NodeRef,
-        right: NodeRef,
-    },
-    Block {
-        stats_len: RefLen,
-        /// Double-indirection reference to the index of the reference of the last statement
-        /// Used exclusively by the parser and has no meaning outside of it
-        last_stat: usize,
-        tail_expr: NodeRef,
-    },
+    Var { name: S, assignment: bool },
+    Return { right: bool },
+    UnOp { op: UnOp },
+    BinOp { op: BinOp },
+    Block { len: RefLen, last_stat: NodeRef },
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -129,6 +107,19 @@ impl NodeRef {
     #[inline]
     pub fn get(self) -> usize {
         self.0 as usize
+    }
+}
+
+impl std::ops::SubAssign<u32> for NodeRef {
+    fn sub_assign(&mut self, rhs: u32) {
+        self.0 -= rhs
+    }
+}
+
+impl std::ops::Sub<u32> for NodeRef {
+    type Output = Self;
+    fn sub(self, rhs: u32) -> Self::Output {
+        Self(self.0 - rhs)
     }
 }
 
@@ -183,15 +174,13 @@ impl std::ops::Sub<u32> for RefLen {
 
 pub struct AstBuilder<S> {
     nodes: Vec<Node<S>>,
-    refs: Vec<NodeRef>,
     locations: Vec<Span>,
 }
 
-impl<S> AstBuilder<S> {
+impl<S: CompileString> AstBuilder<S> {
     pub fn new(capacity: usize) -> Self {
         Self {
             nodes: Vec::with_capacity(capacity),
-            refs: Vec::with_capacity(capacity),
             locations: Vec::with_capacity(capacity),
         }
     }
@@ -207,7 +196,6 @@ impl<S> AstBuilder<S> {
 
         Ast {
             nodes: self.nodes.into_boxed_slice(),
-            refs: self.refs.into_boxed_slice(),
             locations: self.locations.into_boxed_slice(),
         }
     }
@@ -219,19 +207,17 @@ impl<S> AstBuilder<S> {
         NodeRef::new(index)
     }
 
-    fn swap(&mut self, a: &mut NodeRef, b: &mut NodeRef) {
-        let a_index = a.get();
-        let b_index = b.get();
-        self.nodes.swap(a_index, b_index);
-        self.locations.swap(a_index, b_index);
-        std::mem::swap(a, b);
+    fn insert<N: Into<Node<S>>>(&mut self, index: NodeRef, node: N, location: Span) -> NodeRef {
+        self.nodes.insert(index.get(), node.into());
+        self.locations.insert(index.get(), location);
+        index
     }
-
-    // statements
 
     pub fn push_root<N: Into<Node<S>>>(&mut self, node: N, location: Span) -> NodeRef {
         self.push(node, location)
     }
+
+    // statements
 
     pub fn patch_compound_stat(
         &mut self,
@@ -240,12 +226,11 @@ impl<S> AstBuilder<S> {
         location: Span,
     ) -> NodeRef {
         let node = self.push(node, location);
-        self.refs.push(node);
 
         match self.nodes.get_mut(compound_stat.get()) {
             Some(Node::Stat(Stat::Compound { len, last_stat })) => {
                 *len += 1;
-                *last_stat = self.refs.len().saturating_sub(1);
+                *last_stat = node;
             }
             _ => unreachable!("expected Stat::Compound"),
         }
@@ -263,7 +248,7 @@ impl<S> AstBuilder<S> {
 
         match self.nodes.get_mut(var_decl.get()) {
             Some(Node::Stat(Stat::VarDecl { def, .. })) => {
-                *def = Some(node);
+                *def = true;
             }
             _ => unreachable!("expected Stat::VarDecl"),
         }
@@ -273,19 +258,11 @@ impl<S> AstBuilder<S> {
 
     pub fn patch_expr_stat(
         &mut self,
-        expr_stat: NodeRef,
+        _expr_stat: NodeRef,
         node: Expr<S>,
         location: Span,
     ) -> NodeRef {
         let node = self.push(node, location);
-
-        match self.nodes.get_mut(expr_stat.get()) {
-            Some(Node::Stat(Stat::Expr { expr, .. })) => {
-                *expr = node;
-            }
-            _ => unreachable!("expected Stat::Expr"),
-        }
-
         node
     }
 
@@ -296,7 +273,7 @@ impl<S> AstBuilder<S> {
 
         match self.nodes.get_mut(var_expr.get()) {
             Some(Node::Expr(Expr::Var { assignment, .. })) => {
-                *assignment = Some(node);
+                *assignment = true;
             }
             _ => unreachable!("expected Expr::Var"),
         }
@@ -314,7 +291,7 @@ impl<S> AstBuilder<S> {
 
         match self.nodes.get_mut(return_expr.get()) {
             Some(Node::Expr(Expr::Return { right })) => {
-                *right = Some(node);
+                *right = true;
             }
             _ => unreachable!("expected Expr::Return"),
         }
@@ -324,56 +301,31 @@ impl<S> AstBuilder<S> {
 
     pub fn patch_un_op_expr(
         &mut self,
-        un_op_expr: NodeRef,
+        _un_op_expr: NodeRef,
         node: Expr<S>,
         location: Span,
     ) -> NodeRef {
         let node = self.push(node, location);
-
-        match self.nodes.get_mut(un_op_expr.get()) {
-            Some(Node::Expr(Expr::UnOp { right, .. })) => {
-                *right = node;
-            }
-            _ => unreachable!("expected Expr::UnOp"),
-        }
-
         node
     }
 
-    pub fn patch_infix_expr<F: FnOnce(NodeRef) -> Expr<S>>(
+    pub fn patch_infix_expr<N: Into<Node<S>>>(
         &mut self,
-        mut left: NodeRef,
-        f: F,
+        left: NodeRef,
+        node: N,
         location: Span,
     ) -> NodeRef {
-        let mut node = self.push(Expr::Integer(0), location);
-
-        self.swap(&mut left, &mut node);
-        match self.nodes.get_mut(node.get()) {
-            Some(Node::Expr(bin)) => {
-                *bin = f(left);
-            }
-            _ => unreachable!("missing node"),
-        }
-
+        let node = self.insert(left, node.into(), location);
         node
     }
 
     pub fn patch_bin_op_expr_right(
         &mut self,
-        bin_op_expr: NodeRef,
+        _bin_op_expr: NodeRef,
         node: Expr<S>,
         location: Span,
     ) -> NodeRef {
         let node = self.push(node, location);
-
-        match self.nodes.get_mut(bin_op_expr.get()) {
-            Some(Node::Expr(Expr::BinOp { right, .. })) => {
-                *right = node;
-            }
-            _ => unreachable!("expected Expr::BinOp"),
-        }
-
         node
     }
 
@@ -384,16 +336,11 @@ impl<S> AstBuilder<S> {
         location: Span,
     ) -> NodeRef {
         let node = self.push(node, location);
-        self.refs.push(node);
 
         match self.nodes.get_mut(block_expr.get()) {
-            Some(Node::Expr(Expr::Block {
-                stats_len,
-                last_stat,
-                ..
-            })) => {
-                *stats_len += 1;
-                *last_stat = self.refs.len().saturating_sub(1);
+            Some(Node::Expr(Expr::Block { len, last_stat })) => {
+                *len += 1;
+                *last_stat = node;
             }
             _ => unreachable!("expected Expr::Block"),
         }
@@ -401,99 +348,57 @@ impl<S> AstBuilder<S> {
         node
     }
 
-    pub fn patch_block_expr_tail(
-        &mut self,
-        block_expr: NodeRef,
-    ) -> std::result::Result<(), Option<Span>> {
-        // ~~~~~ UNHOLINESS BELOW ~~~~~
-
-        // A NodeRef that points to a BlockExpr
-        // Nested blocks will be iteratively flattened from statements to expressions
+    pub fn patch_block_expr_tail(&mut self, block_expr: NodeRef) -> Result<(), Option<Span>> {
         let mut current_block_expr = Some(block_expr);
-        let mut depth = 0;
+        let mut num_removed = 0;
 
         while let Some(mut block_expr) = current_block_expr.take() {
-            // Obtain the length and reference to the last statement
-            // Length will be non-zero
-            let (stats_len, last_stat) = match self.nodes.get(block_expr.get()) {
-                Some(Node::Expr(Expr::Block {
-                    stats_len,
-                    last_stat,
-                    ..
-                })) => {
-                    if *stats_len == 0 {
+            block_expr -= num_removed;
+
+            let (len, last_stat) = match self.nodes.get(block_expr.get()) {
+                Some(Node::Expr(Expr::Block { len, last_stat })) => {
+                    if *len == 0 {
                         return Err(self.locations.get(block_expr.get()).copied());
                     }
 
-                    (*stats_len, *last_stat)
+                    (*len, *last_stat - num_removed)
                 }
-                _ => unreachable!("expected Expr::Block"),
+                _ => unreachable!(),
             };
 
-            // Unfortunately, a ref will need to be removed
-            // from a possibly arbitrary place in the array
-            // Get the node it points to, adjusted by depth
-            // as refs are being removed throughout the process
-            // successive "last_stat" pointers should always be
-            // greater than the previous one, making this safe
-            let last_stat = self.refs.remove(last_stat - depth);
-            depth += 1;
-
-            // scratch variable to avoid borrowing from self
-            let mut scratch;
-
-            let tail = match self.nodes.get(last_stat.get()) {
+            match self.nodes.get(last_stat.get()) {
                 Some(&Node::Stat(Stat::Compound {
                     len,
                     last_stat: stat,
                 })) => {
-                    // Transform compound statements into block expressions in-place
-                    // Set it as the current_block_expr so that it can be flattened
                     *self.nodes.get_mut(last_stat.get()).unwrap() = Node::Expr(Expr::Block {
-                        stats_len: len,
+                        len,
                         last_stat: stat,
-                        tail_expr: NodeRef::default(),
                     });
-                    current_block_expr.insert(last_stat)
+                    current_block_expr = Some(last_stat);
                 }
-                Some(&Node::Stat(Stat::Expr { expr })) => {
-                    scratch = expr;
-                    &mut scratch
+                Some(Node::Stat(Stat::Expr)) => {
+                    self.nodes.remove(last_stat.get());
+                    self.locations.remove(last_stat.get());
+                    num_removed += 1;
                 }
                 _ => return Err(self.locations.get(last_stat.get()).copied()),
-            };
-
-            match stats_len.get() {
-                1 => {
-                    // length of 1, swap the block expression with the tail
-                    self.swap(&mut block_expr, tail);
-                    // try to remove the block expression if possible
-                    // may be junk as it can't be safely removed
-                    // this is fine as long as nothing references it
-                    // (which after the swap, nothing does)
-                    if block_expr.get().saturating_add(1) == self.nodes.len() {
-                        self.nodes.pop();
-                        self.locations.pop();
-                    }
-                }
-                _ => match self.nodes.get_mut(block_expr.get()) {
-                    Some(Node::Expr(Expr::Block {
-                        stats_len,
-                        tail_expr,
-                        ..
-                    })) => {
-                        *stats_len -= 1;
-                        *tail_expr = *tail;
-                    }
-                    _ => unreachable!("expected Expr::Block"),
-                },
             }
 
-            // attempt to remove the last statement node if possible,
-            // it is now junk
-            if last_stat.get().saturating_add(1) == self.nodes.len() {
-                self.nodes.pop();
-                self.locations.pop();
+            match len.get() {
+                1 => {
+                    self.nodes.remove(block_expr.get());
+                    self.locations.remove(block_expr.get());
+                    num_removed += 1;
+                }
+                _ => {
+                    match self.nodes.get_mut(block_expr.get()) {
+                        Some(Node::Expr(Expr::Block { len, .. })) => {
+                            *len -= 1;
+                        }
+                        _ => unreachable!("Expected Expr::Block"),
+                    };
+                }
             }
         }
 
@@ -503,260 +408,254 @@ impl<S> AstBuilder<S> {
 
 // display
 
-struct AstPrettyPrinter<'formatter, 'ast, S> {
-    f: PrettyFormatter<'formatter>,
-    nodes: &'ast [Node<S>],
-    refs: &'ast [NodeRef],
-    ref_cursor: usize,
-    state: Vec<State>,
-}
+mod display {
+    use std::fmt::{Display, Error, Formatter, Write};
 
-impl<S> Write for AstPrettyPrinter<'_, '_, S> {
-    fn write_str(&mut self, s: &str) -> std::fmt::Result {
-        self.f.write_str(s)
-    }
-}
+    use crate::compiler::ast::{Ast, BinOp, Expr, Mutability, Node, RefLen, Root, Stat, UnOp};
+    use crate::pretty_formatter::PrettyFormatter;
 
-#[derive(Debug)]
-enum State {
-    EnterStat(NodeRef),
-    ContinueCompoundStat(RefLen),
-    EnterExpr(NodeRef),
-    ContinueBinExpr(BinOp),
-    EndBinExpr,
-    ContinueBlockExpr(RefLen),
-    EnterTailExpr(NodeRef),
-    EndBlockExpr,
-}
-
-type Result<T> = std::result::Result<T, PrinterErr>;
-
-enum PrinterErr {
-    UnexpectedNode,
-    WriteErr(Error),
-}
-
-impl From<Error> for PrinterErr {
-    fn from(value: Error) -> Self {
-        Self::WriteErr(value)
-    }
-}
-
-impl<'formatter, 'ast, S: Display> AstPrettyPrinter<'formatter, 'ast, S> {
-    fn new(ast: &'ast Ast<S>, f: &'formatter mut Formatter<'_>) -> Self {
-        assert!(!ast.nodes.is_empty(), "Ast is empty");
-
-        Self {
+    pub fn write_ast<S: Display>(ast: &Ast<S>, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut pretty_formatter = AstPrettyPrinter {
             f: PrettyFormatter::new(f),
-            nodes: &ast.nodes,
-            refs: &ast.refs,
-            ref_cursor: 0,
+            nodes: ast.nodes.iter(),
+            // todo small vec?
             state: Vec::with_capacity(32),
-        }
-    }
-
-    #[inline]
-    fn indent(&mut self) {
-        self.f.indent();
-    }
-
-    #[inline]
-    fn unindent(&mut self) {
-        self.f.unindent();
-    }
-
-    fn get_node(&self, index: NodeRef) -> &'ast Node<S> {
-        &self.nodes[index.get()]
-    }
-
-    fn get_statement(&self, index: NodeRef) -> Result<&'ast Stat<S>> {
-        match self.get_node(index) {
-            Node::Stat(node) => Ok(node),
-            _ => Err(PrinterErr::UnexpectedNode),
-        }
-    }
-
-    fn get_expression(&self, index: NodeRef) -> Result<&'ast Expr<S>> {
-        match self.get_node(index) {
-            Node::Expr(node) => Ok(node),
-            _ => Err(PrinterErr::UnexpectedNode),
-        }
-    }
-
-    fn get_next_ref(&mut self) -> NodeRef {
-        let index = self.ref_cursor;
-        self.ref_cursor += 1;
-        self.refs[index]
-    }
-
-    fn push_state(&mut self, state: State) {
-        self.state.push(state);
-    }
-
-    fn pop_state(&mut self) -> Option<State> {
-        self.state.pop()
-    }
-
-    fn visit(mut self) -> Result<()> {
-        while let Some(state) = self.pop_state() {
-            match state {
-                State::EnterStat(node) => self.enter_stat(node)?,
-                State::ContinueCompoundStat(len) => self.continue_compound_stat(len)?,
-                State::EnterExpr(node) => self.enter_expr(node)?,
-                State::ContinueBinExpr(op) => self.continue_bin_expr(op)?,
-                State::EndBinExpr => self.end_bin_expr()?,
-                State::ContinueBlockExpr(len) => self.continue_block_expr(len)?,
-                State::EnterTailExpr(tail_expr) => self.enter_tail_expr(tail_expr)?,
-                State::EndBlockExpr => self.end_block_expr()?,
-            };
-        }
-
-        Ok(())
-    }
-
-    fn enter_stat(&mut self, node: NodeRef) -> Result<()> {
-        writeln!(self)?;
-
-        let statement = self.get_statement(node)?;
-        match statement {
-            Stat::Compound { len, .. } => {
-                write!(self, "{{")?;
-                self.indent();
-                self.push_state(State::ContinueCompoundStat(*len));
+        };
+        pretty_formatter.push_state(State::EnterRoot);
+        match pretty_formatter.visit() {
+            Ok(_) => Ok(()),
+            Err(PrinterErr::ExpectedNode) => {
+                write!(f, "<invalid ast: expected node>")?;
+                Ok(())
             }
-            Stat::VarDecl {
-                mutability,
-                name,
-                def,
-            } => {
-                match mutability {
-                    Mutability::Immutable => write!(self, "val {}", name)?,
-                    Mutability::Mutable => write!(self, "var {}", name)?,
+            Err(PrinterErr::ExpectedRoot) => {
+                write!(f, "<invalid ast: expected root>")?;
+                Ok(())
+            }
+            Err(PrinterErr::ExpectedStat) => {
+                write!(f, "<invalid ast: expected statement>")?;
+                Ok(())
+            }
+            Err(PrinterErr::ExpectedExpr) => {
+                write!(f, "<invalid ast: expected expression>")?;
+                Ok(())
+            }
+            Err(PrinterErr::WriteErr(err)) => Err(err),
+        }
+    }
+
+    #[derive(Debug)]
+    enum State {
+        EnterRoot,
+
+        ContinueCompoundStat(RefLen),
+        EnterStat,
+
+        EnterExpr,
+        ContinueBinOp(BinOp),
+        ExitBinOp,
+        ContinueBlockExpr(RefLen),
+        ExitBlockExpr,
+    }
+
+    type Result<T> = std::result::Result<T, PrinterErr>;
+
+    enum PrinterErr {
+        ExpectedNode,
+        ExpectedRoot,
+        ExpectedStat,
+        ExpectedExpr,
+        WriteErr(Error),
+    }
+
+    impl From<Error> for PrinterErr {
+        fn from(value: Error) -> Self {
+            Self::WriteErr(value)
+        }
+    }
+
+    pub struct AstPrettyPrinter<'formatter, I> {
+        f: PrettyFormatter<'formatter>,
+        nodes: I,
+        state: Vec<State>,
+    }
+
+    impl<I> Write for AstPrettyPrinter<'_, I> {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.f.write_str(s)
+        }
+    }
+
+    impl<'formatter, 'ast, I, S> AstPrettyPrinter<'formatter, I>
+    where
+        I: Iterator<Item = &'ast Node<S>>,
+        S: Display + 'ast,
+    {
+        #[inline]
+        fn indent(&mut self) {
+            self.f.indent();
+        }
+
+        #[inline]
+        fn unindent(&mut self) {
+            self.f.unindent();
+        }
+
+        #[inline]
+        fn next(&mut self) -> Result<&'ast Node<S>> {
+            self.nodes.next().ok_or(PrinterErr::ExpectedNode)
+        }
+
+        #[inline]
+        fn next_root(&mut self) -> Result<&'ast Root> {
+            match self.next()? {
+                Node::Root(node) => Ok(node),
+                _ => Err(PrinterErr::ExpectedRoot),
+            }
+        }
+
+        #[inline]
+        fn next_stat(&mut self) -> Result<&'ast Stat<S>> {
+            match self.next()? {
+                Node::Stat(node) => Ok(node),
+                _ => Err(PrinterErr::ExpectedStat),
+            }
+        }
+
+        #[inline]
+        fn next_expr(&mut self) -> Result<&'ast Expr<S>> {
+            match self.next()? {
+                Node::Expr(node) => Ok(node),
+                _ => Err(PrinterErr::ExpectedExpr),
+            }
+        }
+
+        #[inline]
+        fn push_state(&mut self, state: State) {
+            self.state.push(state);
+        }
+
+        #[inline]
+        fn pop_state(&mut self) -> Option<State> {
+            self.state.pop()
+        }
+
+        fn visit(mut self) -> Result<()> {
+            while let Some(state) = self.pop_state() {
+                match state {
+                    State::EnterRoot => match self.next_root()? {
+                        Root::Statements => {
+                            self.push_state(State::EnterStat);
+                        }
+                    },
+                    State::ContinueCompoundStat(len) => match len.get() {
+                        0 => {
+                            self.unindent();
+                            writeln!(self)?;
+                            write!(self, "}}")?;
+                        }
+                        _ => {
+                            self.push_state(State::ContinueCompoundStat(len - 1));
+                            self.push_state(State::EnterStat);
+                        }
+                    },
+                    State::EnterStat => {
+                        writeln!(self)?;
+                        match *self.next_stat()? {
+                            Stat::Compound { len, .. } => {
+                                write!(self, "{{")?;
+                                self.indent();
+                                self.push_state(State::ContinueCompoundStat(len));
+                            }
+                            Stat::VarDecl {
+                                mutability,
+                                ref name,
+                                def,
+                            } => {
+                                match mutability {
+                                    Mutability::Immutable => write!(self, "val {}", name)?,
+                                    Mutability::Mutable => write!(self, "var {}", name)?,
+                                };
+                                if def {
+                                    write!(self, " = ")?;
+                                    self.push_state(State::EnterExpr);
+                                }
+                            }
+                            Stat::Expr => {
+                                self.push_state(State::EnterExpr);
+                            }
+                        }
+                    }
+                    State::EnterExpr => match *self.next_expr()? {
+                        Expr::Integer(v) => write!(self, "{}", v)?,
+                        Expr::Float(v) => write!(self, "{}", v)?,
+                        Expr::Var {
+                            ref name,
+                            assignment,
+                        } => {
+                            write!(self, "{}", name)?;
+                            if assignment {
+                                write!(self, " = ")?;
+                                self.push_state(State::EnterExpr);
+                            }
+                        }
+                        Expr::Return { right } => {
+                            write!(self, "return")?;
+                            if right {
+                                write!(self, " ")?;
+                                self.push_state(State::EnterExpr);
+                            }
+                        }
+                        Expr::UnOp { op } => {
+                            match op {
+                                UnOp::Neg => write!(self, "-")?,
+                            };
+                            self.push_state(State::EnterExpr);
+                        }
+                        Expr::BinOp { op } => {
+                            write!(self, "(")?;
+                            self.push_state(State::ContinueBinOp(op));
+                            self.push_state(State::EnterExpr);
+                        }
+                        Expr::Block { len, .. } => {
+                            write!(self, "{{")?;
+                            self.indent();
+                            self.push_state(State::ContinueBlockExpr(len));
+                        }
+                    },
+                    State::ContinueBinOp(op) => {
+                        match op {
+                            BinOp::Add => write!(self, " + ")?,
+                            BinOp::Sub => write!(self, " - ")?,
+                            BinOp::Mul => write!(self, " * ")?,
+                            BinOp::Div => write!(self, " / ")?,
+                        };
+                        self.push_state(State::ExitBinOp);
+                        self.push_state(State::EnterExpr);
+                    }
+                    State::ExitBinOp => {
+                        write!(self, ")")?;
+                    }
+                    State::ContinueBlockExpr(len) => match len.get() {
+                        0 => {
+                            writeln!(self)?;
+                            self.push_state(State::ExitBlockExpr);
+                            self.push_state(State::EnterExpr);
+                        }
+                        _ => {
+                            self.push_state(State::ContinueBlockExpr(len - 1));
+                            self.push_state(State::EnterStat);
+                        }
+                    },
+                    State::ExitBlockExpr => {
+                        self.unindent();
+                        writeln!(self)?;
+                        write!(self, "}}")?;
+                    }
                 };
-                if let Some(def) = def {
-                    write!(self, " = ")?;
-                    self.push_state(State::EnterExpr(*def));
-                }
             }
-            Stat::Expr { expr } => {
-                self.push_state(State::EnterExpr(*expr));
-            }
-        };
 
-        Ok(())
-    }
-
-    fn continue_compound_stat(&mut self, len: RefLen) -> Result<()> {
-        match len.get() {
-            0 => {
-                self.unindent();
-                writeln!(self)?;
-                write!(self, "}}")?;
-            }
-            _ => {
-                let new_len = len - 1;
-                self.push_state(State::ContinueCompoundStat(new_len));
-                let next_statement = self.get_next_ref();
-                self.push_state(State::EnterStat(next_statement));
-            }
-        };
-
-        Ok(())
-    }
-
-    fn enter_expr(&mut self, node: NodeRef) -> Result<()> {
-        let expression = self.get_expression(node)?;
-        match *expression {
-            Expr::Integer(v) => write!(self, "{}", v)?,
-            Expr::Float(v) => write!(self, "{}", v)?,
-            Expr::Var {
-                name: ref v,
-                assignment,
-            } => {
-                write!(self, "{}", v)?;
-
-                if let Some(assignment) = assignment {
-                    write!(self, " = ")?;
-                    self.push_state(State::EnterExpr(assignment));
-                }
-            }
-            Expr::Return { right } => {
-                write!(self, "return")?;
-                if let Some(right) = right {
-                    write!(self, " ")?;
-                    self.push_state(State::EnterExpr(right));
-                }
-            }
-            Expr::UnOp { op, right } => {
-                match op {
-                    UnOp::Neg => write!(self, "-")?,
-                }
-                self.push_state(State::EnterExpr(right));
-            }
-            Expr::BinOp { op, left, right } => {
-                write!(self, "(")?;
-                self.push_state(State::EndBinExpr);
-                self.push_state(State::EnterExpr(right));
-                self.push_state(State::ContinueBinExpr(op));
-                self.push_state(State::EnterExpr(left));
-            }
-            Expr::Block {
-                stats_len,
-                tail_expr,
-                ..
-            } => {
-                write!(self, "{{")?;
-                self.indent();
-                self.push_state(State::EnterTailExpr(tail_expr));
-                self.push_state(State::ContinueBlockExpr(stats_len));
-            }
-        };
-
-        Ok(())
-    }
-
-    fn continue_bin_expr(&mut self, op: BinOp) -> Result<()> {
-        match op {
-            BinOp::Add => write!(self, " + ")?,
-            BinOp::Sub => write!(self, " - ")?,
-            BinOp::Mul => write!(self, " * ")?,
-            BinOp::Div => write!(self, " / ")?,
-        };
-
-        Ok(())
-    }
-
-    fn end_bin_expr(&mut self) -> Result<()> {
-        write!(self, ")")?;
-
-        Ok(())
-    }
-
-    fn continue_block_expr(&mut self, len: RefLen) -> Result<()> {
-        if len > 0 {
-            let new_len = len - 1;
-            self.push_state(State::ContinueBlockExpr(new_len));
-
-            let next_statement = self.get_next_ref();
-            self.push_state(State::EnterStat(next_statement));
+            Ok(())
         }
-
-        Ok(())
-    }
-
-    fn enter_tail_expr(&mut self, tail_expr: NodeRef) -> Result<()> {
-        writeln!(self)?;
-        self.push_state(State::EndBlockExpr);
-        self.push_state(State::EnterExpr(tail_expr));
-
-        Ok(())
-    }
-
-    fn end_block_expr(&mut self) -> Result<()> {
-        self.unindent();
-        writeln!(self)?;
-        write!(self, "}}")?;
-
-        Ok(())
     }
 }

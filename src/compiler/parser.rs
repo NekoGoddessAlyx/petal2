@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::compiler::ast::{Ast, AstBuilder, BinOp, Mutability, NodeRef, Stat, UnOp};
+use crate::compiler::ast::{Ast, AstBuilder, BinOp, Mutability, NodeRef, Root, Stat, UnOp};
 use crate::compiler::ast::{Expr, RefLen};
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::{Span, Token};
@@ -438,10 +438,11 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     fn begin_statements_root(&mut self) {
         let location = self.peek_location();
+        self.ast.push_root(Root::Statements, location);
         let root = self.ast.push_root(
             Stat::Compound {
                 len: RefLen::default(),
-                last_stat: 0,
+                last_stat: NodeRef::default(),
             },
             location,
         );
@@ -493,7 +494,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             push_stat,
             Stat::Compound {
                 len: RefLen::default(),
-                last_stat: 0,
+                last_stat: NodeRef::default(),
             },
             brace_location,
         );
@@ -557,7 +558,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             Stat::VarDecl {
                 mutability,
                 name,
-                def: None,
+                def: false,
             },
             var_location,
         );
@@ -579,13 +580,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     fn begin_expression_statement(&mut self, push_stat: PushStat) {
         let expr_location = self.peek_location();
-        let expr_stat = self.push_statement(
-            push_stat,
-            Stat::Expr {
-                expr: NodeRef::default(),
-            },
-            expr_location,
-        );
+        let expr_stat = self.push_statement(push_stat, Stat::Expr, expr_location);
 
         self.push_state(State::EndExpressionStatement);
         self.push_state(State::BeginExpression {
@@ -608,7 +603,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 let return_location = self.peek_location();
                 self.advance();
                 let left =
-                    self.push_expression(push_expr, Expr::Return { right: None }, return_location);
+                    self.push_expression(push_expr, Expr::Return { right: false }, return_location);
 
                 self.push_state(State::BeginExpressionInfix { precedence, left });
                 if self.peek().is_expression() {
@@ -624,9 +619,8 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 let block = self.push_expression(
                     push_expr,
                     Expr::Block {
-                        stats_len: RefLen::default(),
-                        last_stat: 0,
-                        tail_expr: NodeRef::default(),
+                        len: RefLen::default(),
+                        last_stat: NodeRef::default(),
                     },
                     brace_location,
                 );
@@ -661,10 +655,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                     _ => {
                         let left = self.push_expression(
                             push_expr,
-                            Expr::UnOp {
-                                op: UnOp::Neg,
-                                right: NodeRef::default(),
-                            },
+                            Expr::UnOp { op: UnOp::Neg },
                             op_location,
                         );
                         self.push_state(State::BeginExpression {
@@ -695,7 +686,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                     push_expr,
                     Expr::Var {
                         name,
-                        assignment: None,
+                        assignment: false,
                     },
                     var_location,
                 );
@@ -735,15 +726,9 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
         let mut bin_expr = |op| {
             self.advance();
-            let left = self.ast.patch_infix_expr(
-                left,
-                |left| Expr::BinOp {
-                    op,
-                    left,
-                    right: NodeRef::default(),
-                },
-                next_location,
-            );
+            let left = self
+                .ast
+                .patch_infix_expr(left, Expr::BinOp { op }, next_location);
             self.push_state(State::BeginExpressionInfix { precedence, left });
             self.push_state(State::BeginExpression {
                 push_expr: PushExpr::BinExprRight(left),

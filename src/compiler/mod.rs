@@ -134,7 +134,6 @@ where
         }
     };
     println!("Nodes: {:?}", ast.nodes);
-    println!("Refs: {:?}", ast.refs);
     println!("Locations: {:?}", ast.locations);
 
     println!("✨✨✨✨✨✨✨ Nodes (pretty) ✨✨✨✨✨✨✨");

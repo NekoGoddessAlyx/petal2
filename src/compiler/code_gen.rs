@@ -2,7 +2,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::compiler::ast::{BinOp, NodeRef, RefLen, UnOp};
+use crate::compiler::ast::{BinOp, NodeRef, RefLen, Root, UnOp};
 use crate::compiler::registers::{Register, Registers};
 use crate::prototype::{CIndex16, CIndex8, Instruction, Prototype, RIndex};
 use crate::value::Value;
@@ -16,7 +16,10 @@ type Binding = Rc<crate::compiler::sem_check::Binding<PString>>;
 
 #[derive(Debug)]
 pub enum CodeGenError {
-    UnexpectedNode,
+    ExpectedNode,
+    ExpectedRoot,
+    ExpectedStat,
+    ExpectedExpr,
     BadStateTransfer,
     MissingBinding,
     MissingLocalRegister,
@@ -41,8 +44,7 @@ pub fn code_gen<I: StringInterner<String = PString>>(
 
     let mut code_gen = CodeGen {
         nodes: &ast.ast.nodes,
-        refs: &ast.ast.refs,
-        ref_cursor: 0,
+        cursor: 0,
         bindings: &ast.bindings,
 
         strings,
@@ -52,8 +54,7 @@ pub fn code_gen<I: StringInterner<String = PString>>(
         current_function,
     };
 
-    let root = NodeRef::default();
-    code_gen.push_state(State::EnterStat(root));
+    code_gen.push_state(State::EnterRoot);
 
     code_gen.visit()?;
     code_gen.finish()?;
@@ -82,8 +83,11 @@ impl PrototypeBuilder {
 
 #[derive(Debug)]
 enum State {
+    // root
+    EnterRoot,
+
     // statements
-    EnterStat(NodeRef),
+    EnterStat,
     ExitStat,
 
     ContinueCompoundStat(RefLen),
@@ -92,14 +96,14 @@ enum State {
     ExitExprStat,
 
     // expressions
-    EnterExprAnywhere(NodeRef),
-    EnterExpr(NodeRef, ExprDest),
+    EnterExprAnywhere,
+    EnterExpr(ExprDest),
     ExitExpr(RegisterOrConstant16),
 
     ExitVariableExpr(Register, ExprDest),
     ExitReturnExpr(ExprDest),
     ExitUnaryExpr(UnOp, ExprDest),
-    ContinueBinaryExpr(BinOp, NodeRef, ExprDest),
+    ContinueBinaryExpr(BinOp, ExprDest),
     ExitBinaryExpr(BinOp, RegisterOrConstant16, ExprDest),
     ContinueBlockExpr(RefLen),
     ExitBlockExpr(u16, ExprDest),
@@ -119,18 +123,23 @@ impl State {
         }
 
         match self {
+            // root
+            State::EnterRoot => match from {
+                None => code_gen.enter_root(),
+                _ => fail_transfer!(),
+            },
+
             // statements
-            State::EnterStat(statement) => match from {
-                // only valid as long as this is the root
-                None
+            State::EnterStat => match from {
+                Some(State::EnterRoot)
                 | Some(State::ExitStat)
-                | Some(State::EnterStat(..))
+                | Some(State::EnterStat)
                 | Some(State::ContinueCompoundStat(..))
-                | Some(State::ContinueBlockExpr(..)) => code_gen.enter_statement(*statement),
+                | Some(State::ContinueBlockExpr(..)) => code_gen.enter_statement(),
                 _ => fail_transfer!(),
             },
             State::ExitStat => match from {
-                Some(State::EnterStat(..))
+                Some(State::EnterStat)
                 | Some(State::ExitStat)
                 | Some(State::ExitCompoundStat(..))
                 | Some(State::ExitVarDecl)
@@ -139,13 +148,13 @@ impl State {
             },
 
             State::ContinueCompoundStat(len) => match from {
-                Some(State::EnterStat(..)) | Some(State::ExitStat) => {
+                Some(State::EnterStat) | Some(State::ExitStat) => {
                     code_gen.continue_compound_statement(*len)
                 }
                 _ => fail_transfer!(),
             },
             State::ExitCompoundStat(stack_top) => match from {
-                Some(State::EnterStat(..))
+                Some(State::EnterStat)
                 | Some(State::ExitStat)
                 | Some(State::ContinueCompoundStat(..)) => {
                     code_gen.exit_compound_statement(*stack_top)
@@ -162,28 +171,24 @@ impl State {
             },
 
             // expressions
-            State::EnterExprAnywhere(expression) => match from {
-                Some(State::EnterStat(..))
+            State::EnterExprAnywhere => match from {
+                Some(State::EnterStat)
                 | Some(State::ExitStat)
-                | Some(State::EnterExprAnywhere(..))
+                | Some(State::EnterExprAnywhere)
                 | Some(State::EnterExpr(..))
                 | Some(State::ContinueBinaryExpr(..))
-                | Some(State::ContinueBlockExpr(..)) => {
-                    code_gen.enter_expression_anywhere(*expression)
-                }
+                | Some(State::ContinueBlockExpr(..)) => code_gen.enter_expression_anywhere(),
                 _ => fail_transfer!(),
             },
-            State::EnterExpr(expression, dest) => match from {
-                Some(State::EnterStat(..))
-                | Some(State::EnterExprAnywhere(..))
+            State::EnterExpr(dest) => match from {
+                Some(State::EnterStat)
+                | Some(State::EnterExprAnywhere)
                 | Some(State::EnterExpr(..))
-                | Some(State::ContinueBinaryExpr(..)) => {
-                    code_gen.enter_expression(*expression, *dest)
-                }
+                | Some(State::ContinueBinaryExpr(..)) => code_gen.enter_expression(*dest),
                 _ => fail_transfer!(),
             },
             State::ExitExpr(..) => match from {
-                Some(State::EnterExprAnywhere(..))
+                Some(State::EnterExprAnywhere)
                 | Some(State::EnterExpr(..))
                 | Some(State::ExitReturnExpr(..))
                 | Some(State::ExitUnaryExpr(..))
@@ -206,9 +211,9 @@ impl State {
                 }
                 _ => fail_transfer!(),
             },
-            State::ContinueBinaryExpr(op, right, dest) => match from {
+            State::ContinueBinaryExpr(op, dest) => match from {
                 Some(State::ExitExpr(left)) => {
-                    code_gen.continue_binary_expression(*op, left, *right, *dest)
+                    code_gen.continue_binary_expression(*op, left, *dest)
                 }
                 _ => fail_transfer!(),
             },
@@ -220,7 +225,7 @@ impl State {
             },
             State::ContinueBlockExpr(len) => match from {
                 Some(State::ExitStat)
-                | Some(State::EnterExprAnywhere(..))
+                | Some(State::EnterExprAnywhere)
                 | Some(State::EnterExpr(..)) => code_gen.continue_block_expr(*len),
                 _ => fail_transfer!(),
             },
@@ -236,8 +241,7 @@ impl State {
 
 struct CodeGen<'ast, I: StringInterner<String = PString>> {
     nodes: &'ast [Node],
-    refs: &'ast [NodeRef],
-    ref_cursor: usize,
+    cursor: usize,
     bindings: &'ast HashMap<NodeRef, Binding>,
 
     strings: I,
@@ -248,28 +252,35 @@ struct CodeGen<'ast, I: StringInterner<String = PString>> {
 }
 
 impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
-    fn get_node(&self, index: NodeRef) -> &'ast Node {
-        &self.nodes[index.get()]
+    fn next(&mut self) -> Result<&'ast Node> {
+        let node = self.nodes.get(self.cursor);
+        self.cursor += 1;
+        node.ok_or(CodeGenError::ExpectedNode)
     }
 
-    fn get_statement(&self, index: NodeRef) -> Result<&'ast Stat> {
-        match self.get_node(index) {
+    fn next_root(&mut self) -> Result<&'ast Root> {
+        match self.next()? {
+            Node::Root(node) => Ok(node),
+            _ => Err(CodeGenError::ExpectedRoot),
+        }
+    }
+
+    fn next_stat(&mut self) -> Result<&'ast Stat> {
+        match self.next()? {
             Node::Stat(node) => Ok(node),
-            _ => Err(CodeGenError::UnexpectedNode),
+            _ => Err(CodeGenError::ExpectedStat),
         }
     }
 
-    fn get_expression(&self, index: NodeRef) -> Result<&'ast Expr> {
-        match self.get_node(index) {
+    fn next_expr(&mut self) -> Result<&'ast Expr> {
+        match self.next()? {
             Node::Expr(node) => Ok(node),
-            _ => Err(CodeGenError::UnexpectedNode),
+            _ => Err(CodeGenError::ExpectedExpr),
         }
     }
 
-    fn get_next_ref(&mut self) -> NodeRef {
-        let index = self.ref_cursor;
-        self.ref_cursor += 1;
-        self.refs[index]
+    fn last_node_as_ref(&self) -> NodeRef {
+        NodeRef::new(self.cursor.saturating_sub(1))
     }
 
     fn push_state(&mut self, state: State) {
@@ -404,10 +415,23 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         Ok(())
     }
 
+    // root
+
+    fn enter_root(&mut self) -> Result<()> {
+        match self.next_root()? {
+            Root::Statements => {
+                self.push_state(State::EnterStat);
+            }
+        }
+
+        Ok(())
+    }
+
     // statements
 
-    fn enter_statement(&mut self, node: NodeRef) -> Result<()> {
-        let statement = self.get_statement(node)?;
+    fn enter_statement(&mut self) -> Result<()> {
+        let statement = self.next_stat()?;
+        let node = self.last_node_as_ref();
         match statement {
             Stat::Compound { len, .. } => {
                 let stack_top = self.current_function.registers.stack_top();
@@ -432,14 +456,11 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     .assign_local(local, register);
 
                 match def {
-                    Some(definition) => {
+                    true => {
                         self.push_state(State::ExitVarDecl);
-                        self.push_state(State::EnterExpr(
-                            *definition,
-                            ExprDest::Register(register),
-                        ));
+                        self.push_state(State::EnterExpr(ExprDest::Register(register)));
                     }
-                    None => {
+                    false => {
                         let constant = self.push_constant(Value::Integer(0))?;
                         self.push_instruction(Instruction::LoadC {
                             destination: register.into(),
@@ -451,9 +472,9 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
                 Ok(())
             }
-            Stat::Expr { expr } => {
+            Stat::Expr => {
                 self.push_state(State::ExitExprStat);
-                self.push_state(State::EnterExprAnywhere(*expr));
+                self.push_state(State::EnterExprAnywhere);
 
                 Ok(())
             }
@@ -462,11 +483,8 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
     fn continue_compound_statement(&mut self, len: RefLen) -> Result<()> {
         if len > 0 {
-            let new_len = len - 1;
-            self.push_state(State::ContinueCompoundStat(new_len));
-
-            let next_statement = self.get_next_ref();
-            self.push_state(State::EnterStat(next_statement));
+            self.push_state(State::ContinueCompoundStat(len - 1));
+            self.push_state(State::EnterStat);
         }
 
         Ok(())
@@ -495,9 +513,14 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
     // expressions
 
-    fn enter_expression_anywhere(&mut self, node: NodeRef) -> Result<()> {
-        let expression = self.get_expression(node)?;
-        match *expression {
+    fn enter_expression_anywhere(&mut self) -> Result<()> {
+        let expr = self.next_expr()?;
+        let node = self.last_node_as_ref();
+        self.consume_expr_anywhere(node, expr)
+    }
+
+    fn consume_expr_anywhere(&mut self, node: NodeRef, expr: &'ast Expr) -> Result<()> {
+        match *expr {
             Expr::Integer(v) => {
                 let constant = self.push_constant(Value::Integer(v))?;
                 self.push_state(State::ExitExpr(constant.into()));
@@ -522,34 +545,40 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     .address_of_local(local)
                     .ok_or(CodeGenError::MissingLocalRegister)?;
                 match assignment {
-                    None => {
+                    true => {
+                        self.push_state(State::EnterExpr(ExprDest::Register(local)));
+                    }
+                    false => {
                         self.push_state(State::ExitExpr(RegisterOrConstant16::Protected(local)));
                     }
-                    Some(assignment) => {
-                        self.push_state(State::EnterExpr(assignment, ExprDest::Register(local)));
-                    }
                 }
+
                 Ok(())
             }
             Expr::Return { .. } => {
                 // Execution can't continue after this,
                 // no need to allocate an actual new register
                 let register = Register::default();
-                self.enter_expression(node, ExprDest::Register(register))?;
+                self.consume_expr(node, expr, ExprDest::Register(register))?;
 
                 Ok(())
             }
             _ => {
-                self.enter_expression(node, ExprDest::Anywhere)?;
+                self.consume_expr(node, expr, ExprDest::Anywhere)?;
 
                 Ok(())
             }
         }
     }
 
-    fn enter_expression(&mut self, node: NodeRef, dest: ExprDest) -> Result<()> {
-        let expression = self.get_expression(node)?;
-        match *expression {
+    fn enter_expression(&mut self, dest: ExprDest) -> Result<()> {
+        let expr = self.next_expr()?;
+        let node = self.last_node_as_ref();
+        self.consume_expr(node, expr, dest)
+    }
+
+    fn consume_expr(&mut self, node: NodeRef, expr: &'ast Expr, dest: ExprDest) -> Result<()> {
+        match *expr {
             Expr::Integer(v) => {
                 let dest = self.push_constant_to_register(Value::Integer(v), dest)?;
                 self.push_state(State::ExitExpr(dest.into()));
@@ -574,11 +603,11 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     .address_of_local(local)
                     .ok_or(CodeGenError::MissingLocalRegister)?;
                 match assignment {
-                    Some(assignment) => {
+                    true => {
                         self.push_state(State::ExitVariableExpr(local, dest));
-                        self.push_state(State::EnterExpr(assignment, ExprDest::Register(local)));
+                        self.push_state(State::EnterExpr(ExprDest::Register(local)));
                     }
-                    None => {
+                    false => {
                         self.exit_variable_expression(local, dest)?;
                     }
                 }
@@ -586,12 +615,12 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                 Ok(())
             }
             Expr::Return { right } => match right {
-                Some(right) => {
+                true => {
                     self.push_state(State::ExitReturnExpr(dest));
-                    self.push_state(State::EnterExprAnywhere(right));
+                    self.push_state(State::EnterExprAnywhere);
                     Ok(())
                 }
-                None => {
+                false => {
                     let right = self.allocate(ExprDest::Anywhere)?;
                     let constant = self.push_constant(Value::Integer(0))?;
                     self.push_instruction(Instruction::LoadC {
@@ -603,27 +632,23 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     Ok(())
                 }
             },
-            Expr::UnOp { op, right } => {
+            Expr::UnOp { op } => {
                 self.push_state(State::ExitUnaryExpr(op, dest));
-                self.push_state(State::EnterExprAnywhere(right));
+                self.push_state(State::EnterExprAnywhere);
 
                 Ok(())
             }
-            Expr::BinOp { op, left, right } => {
-                self.push_state(State::ContinueBinaryExpr(op, right, dest));
-                self.push_state(State::EnterExprAnywhere(left));
+            Expr::BinOp { op } => {
+                self.push_state(State::ContinueBinaryExpr(op, dest));
+                self.push_state(State::EnterExprAnywhere);
 
                 Ok(())
             }
-            Expr::Block {
-                stats_len,
-                tail_expr,
-                ..
-            } => {
+            Expr::Block { len, .. } => {
                 let stack_top = self.current_function.registers.stack_top();
                 self.push_state(State::ExitBlockExpr(stack_top, dest));
-                self.push_state(State::EnterExprAnywhere(tail_expr));
-                self.push_state(State::ContinueBlockExpr(stats_len));
+                self.push_state(State::EnterExprAnywhere);
+                self.push_state(State::ContinueBlockExpr(len));
 
                 Ok(())
             }
@@ -677,11 +702,10 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         &mut self,
         op: BinOp,
         left: RegisterOrConstant16,
-        right: NodeRef,
         dest: ExprDest,
     ) -> Result<()> {
         self.push_state(State::ExitBinaryExpr(op, left, dest));
-        self.push_state(State::EnterExprAnywhere(right));
+        self.push_state(State::EnterExprAnywhere);
 
         Ok(())
     }
@@ -712,11 +736,8 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
 
     fn continue_block_expr(&mut self, len: RefLen) -> Result<()> {
         if len > 0 {
-            let new_len = len - 1;
-            self.push_state(State::ContinueBlockExpr(new_len));
-
-            let next_statement = self.get_next_ref();
-            self.push_state(State::EnterStat(next_statement));
+            self.push_state(State::ContinueBlockExpr(len - 1));
+            self.push_state(State::EnterStat);
         }
 
         Ok(())

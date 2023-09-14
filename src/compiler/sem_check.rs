@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
-use crate::compiler::ast::{Ast, Expr, Mutability, Node, NodeRef, RefLen, Stat};
+use crate::compiler::ast::{Ast, Expr, Mutability, Node, NodeRef, RefLen, Root, Stat};
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::Span;
 use crate::compiler::string::CompileString;
@@ -38,7 +38,10 @@ impl<S: CompileString> Display for SemCheckMsg<S> {
 pub enum SemCheckError {
     FailedSemCheck,
     UnexpectedNode,
-    BadStateTransfer,
+    ExpectedNode,
+    ExpectedRoot,
+    ExpectedStat,
+    ExpectedExpr,
     MissingContext,
     MissingScope,
 }
@@ -68,9 +71,8 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast<S>) -> Res
         had_error: false,
 
         nodes: &ast.nodes,
-        refs: &ast.refs,
-        ref_cursor: 0,
         locations: &ast.locations,
+        cursor: 0,
 
         state: Vec::with_capacity(32),
 
@@ -82,8 +84,7 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast<S>) -> Res
         scopes: vec![],
         num_locals: 0,
     });
-    let root = NodeRef::default();
-    sem_check.push_state(State::EnterStat(root));
+    sem_check.push_state(State::EnterRoot);
 
     sem_check.visit()?;
 
@@ -98,70 +99,19 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast<S>) -> Res
 
 #[derive(Debug)]
 enum State {
+    // root
+    EnterRoot,
+
     // statements
-    EnterStat(NodeRef),
-    ExitStat(NodeRef),
+    EnterStat,
     ContinueCompoundStat(RefLen),
 
     // expressions
-    EnterExpr(NodeRef),
-    ContinueBlockExpr(RefLen),
-}
+    EnterExpr,
 
-impl State {
-    fn enter<C: Callback, S: CompileString>(
-        &mut self,
-        from: Option<State>,
-        sem_check: &mut SemCheck<C, S>,
-    ) -> Result<()> {
-        macro_rules! fail_transfer {
-            () => {{
-                dbg!(&from);
-                Err(SemCheckError::BadStateTransfer)
-            }};
-        }
-
-        match *self {
-            // statements
-            State::EnterStat(statement) => match from {
-                None
-                | Some(State::EnterStat(..))
-                | Some(State::ExitStat(..))
-                | Some(State::ContinueCompoundStat(..))
-                | Some(State::EnterExpr(..))
-                | Some(State::ContinueBlockExpr(..)) => sem_check.enter_statement(statement),
-                //_ => fail_transfer!(),
-            },
-            State::ExitStat(statement) => match from {
-                Some(State::EnterStat(..))
-                | Some(State::ExitStat(..))
-                | Some(State::ContinueCompoundStat(..))
-                | Some(State::EnterExpr(..)) => sem_check.exit_statement(statement),
-                _ => fail_transfer!(),
-            },
-            State::ContinueCompoundStat(len) => match from {
-                Some(State::EnterStat(..))
-                | Some(State::ExitStat(..))
-                | Some(State::EnterExpr(..)) => sem_check.continue_compound_statement(len),
-                _ => fail_transfer!(),
-            },
-
-            // expressions
-            State::EnterExpr(expression) => match from {
-                Some(State::EnterStat(..))
-                | Some(State::ExitStat(..))
-                | Some(State::EnterExpr(..))
-                | Some(State::ContinueBlockExpr(..)) => sem_check.enter_expression(expression),
-                _ => fail_transfer!(),
-            },
-            State::ContinueBlockExpr(len) => match from {
-                Some(State::ExitStat(..)) | Some(State::EnterExpr(..)) => {
-                    sem_check.continue_block_expr(len)
-                }
-                _ => fail_transfer!(),
-            },
-        }
-    }
+    // ..
+    EndScope,
+    DeclareVar(NodeRef),
 }
 
 struct SemCheck<'ast, C, S> {
@@ -169,9 +119,8 @@ struct SemCheck<'ast, C, S> {
     had_error: bool,
 
     nodes: &'ast [Node<S>],
-    refs: &'ast [NodeRef],
-    ref_cursor: usize,
     locations: &'ast [Span],
+    cursor: usize,
 
     state: Vec<State>,
 
@@ -185,28 +134,42 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         (self.callback)(message, source);
     }
 
-    fn get_node(&self, index: NodeRef) -> &'ast Node<S> {
-        &self.nodes[index.get()]
+    fn next(&mut self) -> Result<&'ast Node<S>> {
+        let node = self.nodes.get(self.cursor);
+        self.cursor += 1;
+        node.ok_or(SemCheckError::ExpectedNode)
     }
 
-    fn get_statement(&self, index: NodeRef) -> Result<&'ast Stat<S>> {
-        match self.get_node(index) {
+    fn next_root(&mut self) -> Result<&'ast Root> {
+        match self.next()? {
+            Node::Root(node) => Ok(node),
+            _ => Err(SemCheckError::ExpectedRoot),
+        }
+    }
+
+    fn next_stat(&mut self) -> Result<&'ast Stat<S>> {
+        match self.next()? {
             Node::Stat(node) => Ok(node),
-            _ => Err(SemCheckError::UnexpectedNode),
+            _ => Err(SemCheckError::ExpectedStat),
         }
     }
 
-    fn get_expression(&self, index: NodeRef) -> Result<&'ast Expr<S>> {
-        match self.get_node(index) {
+    fn next_expr(&mut self) -> Result<&'ast Expr<S>> {
+        match self.next()? {
             Node::Expr(node) => Ok(node),
-            _ => Err(SemCheckError::UnexpectedNode),
+            _ => Err(SemCheckError::ExpectedExpr),
         }
     }
 
-    fn get_next_ref(&mut self) -> NodeRef {
-        let index = self.ref_cursor;
-        self.ref_cursor += 1;
-        self.refs[index]
+    fn get_stat(&mut self, node: NodeRef) -> Result<&'ast Stat<S>> {
+        match self.nodes.get(node.get()) {
+            Some(Node::Stat(node)) => Ok(node),
+            _ => Err(SemCheckError::ExpectedStat),
+        }
+    }
+
+    fn last_node_as_ref(&self) -> NodeRef {
+        NodeRef::new(self.cursor.saturating_sub(1))
     }
 
     fn get_location(&self, index: NodeRef) -> Span {
@@ -298,154 +261,99 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     // visit
 
     fn visit(&mut self) -> Result<()> {
-        let mut previous = None;
-        while let Some(mut state) = self.pop_state() {
-            state.enter(previous, self)?;
-            previous = Some(state);
-        }
-
-        Ok(())
-    }
-
-    // statements
-
-    fn enter_statement(&mut self, node: NodeRef) -> Result<()> {
-        let statement = self.get_statement(node)?;
-        match statement {
-            Stat::Compound { len, .. } => {
-                self.begin_scope()?;
-
-                self.push_state(State::ExitStat(node));
-                self.push_state(State::ContinueCompoundStat(*len));
-
-                Ok(())
-            }
-            Stat::VarDecl {
-                def: definition, ..
-            } => {
-                self.push_state(State::ExitStat(node));
-
-                if let Some(definition) = definition {
-                    self.push_state(State::EnterExpr(*definition));
+        while let Some(state) = self.pop_state() {
+            match state {
+                State::EnterRoot => match self.next_root()? {
+                    Root::Statements => {
+                        self.push_state(State::EnterStat);
+                    }
+                },
+                State::EnterStat => match *self.next_stat()? {
+                    Stat::Compound { len, .. } => {
+                        self.begin_scope()?;
+                        self.push_state(State::EndScope);
+                        self.push_state(State::ContinueCompoundStat(len));
+                    }
+                    Stat::VarDecl { def, .. } => {
+                        self.push_state(State::DeclareVar(self.last_node_as_ref()));
+                        if def {
+                            self.push_state(State::EnterExpr);
+                        }
+                    }
+                    Stat::Expr => {
+                        self.push_state(State::EnterExpr);
+                    }
+                },
+                State::ContinueCompoundStat(len) => {
+                    if len > 0 {
+                        self.push_state(State::ContinueCompoundStat(len - 1));
+                        self.push_state(State::EnterStat);
+                    }
                 }
+                State::EnterExpr => match *self.next_expr()? {
+                    Expr::Integer(_) => {}
+                    Expr::Float(_) => {}
+                    Expr::Var {
+                        ref name,
+                        assignment,
+                    } => {
+                        let node = self.last_node_as_ref();
 
-                Ok(())
-            }
-            Stat::Expr { expr } => {
-                self.push_state(State::EnterExpr(*expr));
+                        match self.lookup(name.clone()) {
+                            Some(binding) => {
+                                match binding.mutability {
+                                    Mutability::Immutable if assignment => {
+                                        self.on_error(
+                                            &SemCheckMsg::CannotAssignToVal(binding.name.clone()),
+                                            Some(self.get_location(node)),
+                                        );
+                                    }
+                                    _ => {}
+                                }
 
-                Ok(())
-            }
-        }
-    }
-
-    fn exit_statement(&mut self, node: NodeRef) -> Result<()> {
-        let statement = self.get_statement(node)?;
-        match statement {
-            Stat::Compound { .. } => {
-                self.end_scope()?;
-
-                Ok(())
-            }
-            Stat::VarDecl {
-                mutability, name, ..
-            } => {
-                self.declare(node, *mutability, name.clone())?;
-
-                Ok(())
-            }
-            Stat::Expr { .. } => Ok(()),
-        }
-    }
-
-    fn continue_compound_statement(&mut self, len: RefLen) -> Result<()> {
-        if len > 0 {
-            let new_len = len - 1;
-            self.push_state(State::ContinueCompoundStat(new_len));
-
-            let next_statement = self.get_next_ref();
-            self.push_state(State::EnterStat(next_statement));
-        }
-
-        Ok(())
-    }
-
-    // expressions
-
-    fn enter_expression(&mut self, node: NodeRef) -> Result<()> {
-        let expression = self.get_expression(node)?;
-        match expression {
-            Expr::Integer(..) | Expr::Float(..) => Ok(()),
-            Expr::Var {
-                name: var,
-                assignment,
-            } => {
-                match self.lookup(var.clone()) {
-                    Some(binding) => {
-                        match binding.mutability {
-                            Mutability::Immutable if assignment.is_some() => {
+                                self.bindings.insert(node, binding);
+                            }
+                            None => {
                                 self.on_error(
-                                    &SemCheckMsg::CannotAssignToVal(binding.name.clone()),
+                                    &SemCheckMsg::VariableNotFound(name.clone()),
                                     Some(self.get_location(node)),
                                 );
                             }
-                            _ => {}
+                        };
+
+                        if assignment {
+                            self.push_state(State::EnterExpr);
                         }
-
-                        self.bindings.insert(node, binding);
                     }
-                    None => {
-                        self.on_error(
-                            &SemCheckMsg::VariableNotFound(var.clone()),
-                            Some(self.get_location(node)),
-                        );
+                    Expr::Return { right } => {
+                        if right {
+                            self.push_state(State::EnterExpr);
+                        }
                     }
-                };
-
-                if let Some(assignment) = assignment {
-                    self.push_state(State::EnterExpr(*assignment));
+                    Expr::UnOp { .. } => {
+                        self.push_state(State::EnterExpr);
+                    }
+                    Expr::BinOp { .. } => {
+                        self.push_state(State::EnterExpr);
+                        self.push_state(State::EnterExpr);
+                    }
+                    Expr::Block { len, .. } => {
+                        self.push_state(State::EnterExpr);
+                        self.push_state(State::ContinueCompoundStat(len));
+                    }
+                },
+                State::EndScope => {
+                    self.end_scope()?;
                 }
-
-                Ok(())
+                State::DeclareVar(node) => match self.get_stat(node)? {
+                    Stat::VarDecl {
+                        mutability, name, ..
+                    } => {
+                        self.declare(node, *mutability, name.clone())?;
+                    }
+                    _ => return Err(SemCheckError::UnexpectedNode),
+                },
             }
-            Expr::Return { right } => {
-                if let Some(right) = right {
-                    self.push_state(State::EnterExpr(*right));
-                }
-
-                Ok(())
-            }
-            Expr::UnOp { right, .. } => {
-                self.push_state(State::EnterExpr(*right));
-
-                Ok(())
-            }
-            Expr::BinOp { left, right, .. } => {
-                self.push_state(State::EnterExpr(*left));
-                self.push_state(State::EnterExpr(*right));
-
-                Ok(())
-            }
-            Expr::Block {
-                stats_len,
-                tail_expr,
-                ..
-            } => {
-                self.push_state(State::EnterExpr(*tail_expr));
-                self.push_state(State::ContinueBlockExpr(*stats_len));
-
-                Ok(())
-            }
-        }
-    }
-
-    fn continue_block_expr(&mut self, len: RefLen) -> Result<()> {
-        if len > 0 {
-            let new_len = len - 1;
-            self.push_state(State::ContinueBlockExpr(new_len));
-
-            let next_statement = self.get_next_ref();
-            self.push_state(State::EnterStat(next_statement));
         }
 
         Ok(())
