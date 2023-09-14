@@ -2,6 +2,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use gc_arena::Mutation;
 use smallvec::{smallvec, SmallVec};
 
 use crate::compiler::ast::{BinOp, NodeRef, RefLen, Root, UnOp};
@@ -10,11 +11,11 @@ use crate::prototype::{CIndex16, CIndex8, Instruction, Prototype, RIndex};
 use crate::value::Value;
 use crate::{PString, StringInterner};
 
-type Ast = crate::compiler::sem_check::Ast2<PString>;
-type Node = crate::compiler::ast::Node<PString>;
-type Stat = crate::compiler::ast::Stat<PString>;
-type Expr = crate::compiler::ast::Expr<PString>;
-type Binding = Rc<crate::compiler::sem_check::Binding<PString>>;
+type Ast<'gc> = crate::compiler::sem_check::Ast2<PString<'gc>>;
+type Node<'gc> = crate::compiler::ast::Node<PString<'gc>>;
+type Stat<'gc> = crate::compiler::ast::Stat<PString<'gc>>;
+type Expr<'gc> = crate::compiler::ast::Expr<PString<'gc>>;
+type Binding<'gc> = Rc<crate::compiler::sem_check::Binding<PString<'gc>>>;
 
 #[derive(Debug)]
 pub enum CodeGenError {
@@ -31,11 +32,12 @@ pub enum CodeGenError {
 
 pub type Result<T> = std::result::Result<T, CodeGenError>;
 
-pub fn code_gen<I: StringInterner<String = PString>>(
-    ast: Ast,
+pub fn code_gen<'gc, I: StringInterner<'gc, String = PString<'gc>>>(
+    mc: &Mutation<'gc>,
+    ast: Ast<'gc>,
     mut strings: I,
-) -> Result<Prototype> {
-    let name = strings.intern(b"test");
+) -> Result<Prototype<'gc>> {
+    let name = strings.intern(mc, b"test");
     let current_function = PrototypeBuilder {
         name,
         registers: Registers::new(),
@@ -45,6 +47,7 @@ pub fn code_gen<I: StringInterner<String = PString>>(
     };
 
     let mut code_gen = CodeGen {
+        mc,
         nodes: &ast.ast.nodes,
         cursor: 0,
         bindings: &ast.bindings,
@@ -64,16 +67,16 @@ pub fn code_gen<I: StringInterner<String = PString>>(
     Ok(code_gen.current_function.build())
 }
 
-struct PrototypeBuilder {
-    name: PString,
+struct PrototypeBuilder<'gc> {
+    name: PString<'gc>,
     registers: Registers,
     instructions: Vec<Instruction>,
     constants_map: HashMap<Value, CIndex>,
     constants: Vec<Value>,
 }
 
-impl PrototypeBuilder {
-    fn build(self) -> Prototype {
+impl<'gc> PrototypeBuilder<'gc> {
+    fn build(self) -> Prototype<'gc> {
         Prototype {
             name: self.name,
             stack_size: self.registers.stack_size().saturating_sub(1) as u8,
@@ -112,10 +115,10 @@ enum State {
 }
 
 impl State {
-    fn enter<I: StringInterner<String = PString>>(
+    fn enter<'gc, I: StringInterner<'gc, String = PString<'gc>>>(
         &mut self,
         from: Option<State>,
-        code_gen: &mut CodeGen<I>,
+        code_gen: &mut CodeGen<'gc, '_, I>,
     ) -> Result<()> {
         macro_rules! fail_transfer {
             () => {{
@@ -241,20 +244,21 @@ impl State {
     }
 }
 
-struct CodeGen<'ast, I: StringInterner<String = PString>> {
-    nodes: &'ast [Node],
+struct CodeGen<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> {
+    mc: &'ast Mutation<'gc>,
+    nodes: &'ast [Node<'gc>],
     cursor: usize,
-    bindings: &'ast HashMap<NodeRef, Binding>,
+    bindings: &'ast HashMap<NodeRef, Binding<'gc>>,
 
     strings: I,
 
     state: SmallVec<[State; 32]>,
 
-    current_function: PrototypeBuilder,
+    current_function: PrototypeBuilder<'gc>,
 }
 
-impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
-    fn next(&mut self) -> Result<&'ast Node> {
+impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast, I> {
+    fn next(&mut self) -> Result<&'ast Node<'gc>> {
         let node = self.nodes.get(self.cursor);
         self.cursor += 1;
         node.ok_or(CodeGenError::ExpectedNode)
@@ -267,14 +271,14 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
         }
     }
 
-    fn next_stat(&mut self) -> Result<&'ast Stat> {
+    fn next_stat(&mut self) -> Result<&'ast Stat<'gc>> {
         match self.next()? {
             Node::Stat(node) => Ok(node),
             _ => Err(CodeGenError::ExpectedStat),
         }
     }
 
-    fn next_expr(&mut self) -> Result<&'ast Expr> {
+    fn next_expr(&mut self) -> Result<&'ast Expr<'gc>> {
         match self.next()? {
             Node::Expr(node) => Ok(node),
             _ => Err(CodeGenError::ExpectedExpr),

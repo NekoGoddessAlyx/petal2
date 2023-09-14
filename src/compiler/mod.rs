@@ -1,6 +1,8 @@
 use std::fmt::{Display, Formatter};
 use std::str::from_utf8;
 
+use gc_arena::Mutation;
+
 use crate::compiler::ast::Node;
 use crate::compiler::code_gen::code_gen;
 use crate::compiler::lexer::{lex, Source, Span};
@@ -104,13 +106,17 @@ impl<S> Display for CompilerMessage<'_, S> {
 
 // TODO: Feeling some design tension with the callbacks and the result type.
 // do something
-pub fn compile<C, S>(mut callback: C, source: S) -> Result<Prototype, ()>
+pub fn compile<'gc, C, S>(
+    mc: &Mutation<'gc>,
+    mut callback: C,
+    source: S,
+) -> Result<Prototype<'gc>, ()>
 where
     C: FnMut(CompilerMessage<PString>),
     S: AsRef<[u8]>,
 {
     let mut strings = PStringInterner::default();
-    let source = lex(source.as_ref(), |bytes| strings.intern(bytes));
+    let source = lex(source.as_ref(), |bytes| strings.intern(mc, bytes));
     println!("Tokens: {:?}", source.tokens);
     println!("Locations: {:?}", source.locations);
     println!("Line Starts: {:?}", source.line_starts);
@@ -127,7 +133,7 @@ where
         |message, at| callback(message, at),
         &source.tokens,
         &source.locations,
-        |bytes| strings.intern(bytes),
+        |bytes| strings.intern(mc, bytes),
     ) {
         Ok(ast) => ast,
         Err(_error) => {
@@ -158,7 +164,7 @@ where
     };
     println!("Bindings: {:?}", ast.bindings);
 
-    match code_gen(ast, strings) {
+    match code_gen(mc, ast, strings) {
         Ok(prototype) => Ok(prototype),
         Err(error) => {
             println!("{:?}", error);
