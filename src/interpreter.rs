@@ -1,7 +1,15 @@
 use crate::prototype::{Instruction, Prototype};
-use crate::value::Value;
+use crate::value::{TypeError, Value};
 
-pub enum InterpretResult {}
+pub enum InterpretResult {
+    TypeError(TypeError),
+}
+
+impl From<TypeError> for InterpretResult {
+    fn from(value: TypeError) -> Self {
+        Self::TypeError(value)
+    }
+}
 
 pub fn interpret(function: Prototype) -> Result<Value, InterpretResult> {
     let instructions = function.instructions.as_ref();
@@ -57,92 +65,92 @@ pub fn interpret(function: Prototype) -> Result<Value, InterpretResult> {
                     integer,
                 } => mov!(destination, Value::Integer(integer as i64)),
 
-                Instruction::NegR { destination, right } => mov!(destination, -peek!(right)),
-                Instruction::NegC { destination, right } => mov!(destination, -constant!(right)),
+                Instruction::NegR { destination, right } => mov!(destination, (-peek!(right))?),
+                Instruction::NegC { destination, right } => mov!(destination, (-constant!(right))?),
 
                 Instruction::AddRR {
                     destination,
                     left,
                     right,
-                } => mov!(destination, peek!(left) + peek!(right)),
+                } => mov!(destination, (peek!(left) + peek!(right))?),
                 Instruction::AddRC {
                     destination,
                     left,
                     right,
-                } => mov!(destination, peek!(left) + constant!(right)),
+                } => mov!(destination, (peek!(left) + constant!(right))?),
                 Instruction::AddCR {
                     destination,
                     left,
                     right,
-                } => mov!(destination, constant!(left) + peek!(right)),
+                } => mov!(destination, (constant!(left) + peek!(right))?),
                 Instruction::AddCC {
                     destination,
                     left,
                     right,
-                } => mov!(destination, constant!(left) + constant!(right)),
+                } => mov!(destination, (constant!(left) + constant!(right))?),
 
                 Instruction::SubRR {
                     destination,
                     left,
                     right,
-                } => mov!(destination, peek!(left) - peek!(right)),
+                } => mov!(destination, (peek!(left) - peek!(right))?),
                 Instruction::SubRC {
                     destination,
                     left,
                     right,
-                } => mov!(destination, peek!(left) - constant!(right)),
+                } => mov!(destination, (peek!(left) - constant!(right))?),
                 Instruction::SubCR {
                     destination,
                     left,
                     right,
-                } => mov!(destination, constant!(left) - peek!(right)),
+                } => mov!(destination, (constant!(left) - peek!(right))?),
                 Instruction::SubCC {
                     destination,
                     left,
                     right,
-                } => mov!(destination, constant!(left) - constant!(right)),
+                } => mov!(destination, (constant!(left) - constant!(right))?),
 
                 Instruction::MulRR {
                     destination,
                     left,
                     right,
-                } => mov!(destination, peek!(left) * peek!(right)),
+                } => mov!(destination, (peek!(left) * peek!(right))?),
                 Instruction::MulRC {
                     destination,
                     left,
                     right,
-                } => mov!(destination, peek!(left) * constant!(right)),
+                } => mov!(destination, (peek!(left) * constant!(right))?),
                 Instruction::MulCR {
                     destination,
                     left,
                     right,
-                } => mov!(destination, constant!(left) * peek!(right)),
+                } => mov!(destination, (constant!(left) * peek!(right))?),
                 Instruction::MulCC {
                     destination,
                     left,
                     right,
-                } => mov!(destination, constant!(left) * constant!(right)),
+                } => mov!(destination, (constant!(left) * constant!(right))?),
 
                 Instruction::DivRR {
                     destination,
                     left,
                     right,
-                } => mov!(destination, peek!(left) / peek!(right)),
+                } => mov!(destination, (peek!(left) / peek!(right))?),
                 Instruction::DivRC {
                     destination,
                     left,
                     right,
-                } => mov!(destination, peek!(left) / constant!(right)),
+                } => mov!(destination, (peek!(left) / constant!(right))?),
                 Instruction::DivCR {
                     destination,
                     left,
                     right,
-                } => mov!(destination, constant!(left) / peek!(right)),
+                } => mov!(destination, (constant!(left) / peek!(right))?),
                 Instruction::DivCC {
                     destination,
                     left,
                     right,
-                } => mov!(destination, constant!(left) / constant!(right)),
+                } => mov!(destination, (constant!(left) / constant!(right))?),
             };
         }
     }

@@ -358,6 +358,7 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
                     }
                 }
             }
+            _ => {}
         };
 
         let constant = self.push_constant(constant)?;
@@ -580,13 +581,13 @@ impl<'ast, I: StringInterner<String = PString>> CodeGen<'ast, I> {
     fn consume_expr(&mut self, node: NodeRef, expr: &'ast Expr, dest: ExprDest) -> Result<()> {
         match *expr {
             Expr::Null => {
-                let dest = self.push_constant_to_register(Value::Integer(0), dest)?;
+                let dest = self.push_constant_to_register(Value::Null, dest)?;
                 self.push_state(State::ExitExpr(dest.into()));
 
                 Ok(())
             }
             Expr::Bool(v) => {
-                let dest = self.push_constant_to_register(Value::Integer(v as i64), dest)?;
+                let dest = self.push_constant_to_register(Value::Boolean(v), dest)?;
                 self.push_state(State::ExitExpr(dest.into()));
 
                 Ok(())
