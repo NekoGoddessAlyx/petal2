@@ -1,9 +1,10 @@
 use crate::compiler::sem_check::Local;
+use crate::instruction::RIndex;
 
 #[derive(Copy, Clone, Default, PartialEq, Debug)]
 pub struct Register(u8);
 
-impl From<Register> for crate::prototype::RIndex {
+impl From<Register> for RIndex {
     fn from(value: Register) -> Self {
         value.0
     }

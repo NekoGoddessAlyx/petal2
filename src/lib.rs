@@ -9,6 +9,7 @@ macro_rules! static_assert_size {
 }
 
 mod compiler;
+mod instruction;
 mod interpreter;
 mod pretty_formatter;
 mod prototype;

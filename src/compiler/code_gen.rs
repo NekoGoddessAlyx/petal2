@@ -7,7 +7,8 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::compiler::ast::{BinOp, NodeRef, RefLen, Root, UnOp};
 use crate::compiler::registers::{Register, Registers};
-use crate::prototype::{CIndex16, CIndex8, Instruction, Prototype, RIndex};
+use crate::instruction::{CIndex16, CIndex8, Instruction, RIndex};
+use crate::prototype::Prototype;
 use crate::value::Value;
 use crate::{PString, StringInterner};
 

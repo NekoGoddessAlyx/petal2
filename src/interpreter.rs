@@ -1,4 +1,5 @@
-use crate::prototype::{Instruction, Prototype};
+use crate::instruction::Instruction;
+use crate::prototype::Prototype;
 use crate::value::{TypeError, Value};
 
 #[derive(Debug)]
