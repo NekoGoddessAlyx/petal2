@@ -18,8 +18,8 @@ fn main() {
                 println!("Prototype: {}", prototype);
                 prototype
             }
-            Err(_) => {
-                println!("Compilation failed");
+            Err(error) => {
+                println!("{}", error);
                 return;
             }
         };

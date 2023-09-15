@@ -1,5 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
 use gc_arena::Mutation;
@@ -24,11 +26,35 @@ pub enum CodeGenError {
     ExpectedRoot,
     ExpectedStat,
     ExpectedExpr,
-    BadStateTransfer,
+    BadTransition,
     MissingBinding,
     MissingLocalRegister,
     NoRegistersAvailable,
     ConstantPoolFull,
+}
+
+impl Error for CodeGenError {}
+
+impl Display for CodeGenError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CodeGenError::ExpectedNode => write!(f, "Expected ast node"),
+            CodeGenError::ExpectedRoot => write!(f, "Unexpected root ast node"),
+            CodeGenError::ExpectedStat => write!(f, "Unexpected stat ast node"),
+            CodeGenError::ExpectedExpr => write!(f, "Unexpected expr node"),
+            CodeGenError::BadTransition => write!(f, "Invalid state transition"),
+            CodeGenError::MissingBinding => write!(f, "Missing variable binding"),
+            CodeGenError::MissingLocalRegister => {
+                write!(f, "Local does not have a register assigned")
+            }
+            CodeGenError::NoRegistersAvailable => {
+                write!(f, "No registers are available. Your function is too large.")
+            }
+            CodeGenError::ConstantPoolFull => {
+                write!(f, "Constant pool is full. Your function is too large.")
+            }
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, CodeGenError>;
@@ -124,7 +150,7 @@ impl State {
         macro_rules! fail_transfer {
             () => {{
                 dbg!(&from);
-                Err(CodeGenError::BadStateTransfer)
+                Err(CodeGenError::BadTransition)
             }};
         }
 

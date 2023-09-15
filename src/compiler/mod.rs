@@ -1,13 +1,14 @@
+use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::str::from_utf8;
 
 use gc_arena::Mutation;
 
 use crate::compiler::ast::Node;
-use crate::compiler::code_gen::code_gen;
+use crate::compiler::code_gen::{code_gen, CodeGenError};
 use crate::compiler::lexer::{lex, Source, Span};
-use crate::compiler::parser::parse;
-use crate::compiler::sem_check::sem_check;
+use crate::compiler::parser::{parse, ParserError};
+use crate::compiler::sem_check::{sem_check, SemCheckError};
 use crate::prototype::Prototype;
 use crate::{PString, PStringInterner, StringInterner};
 
@@ -104,17 +105,52 @@ impl<S> Display for CompilerMessage<'_, S> {
 
 // compile
 
-// TODO: Feeling some design tension with the callbacks and the result type.
-// do something
+#[derive(Debug)]
+pub enum CompileError {
+    /// The source input failed to compile
+    CompileFailed(u32),
+    /// An internal compiler error occurred, this is a bug and should be reported
+    CompilerError(Box<dyn Error>),
+}
+
+impl CompileError {
+    fn from<T: Error + 'static>(value: T) -> Self {
+        Self::CompilerError(Box::new(value) as Box<dyn Error>)
+    }
+}
+
+impl Error for CompileError {}
+
+impl Display for CompileError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CompileError::CompileFailed(0) => {
+                write!(
+                    f,
+                    "Compilation failed despite no reported errors ¯\\_(ツ)_/¯"
+                )
+            }
+            CompileError::CompileFailed(1) => {
+                write!(f, "Compilation failed (1 error)")
+            }
+            CompileError::CompileFailed(num_errors) => {
+                write!(f, "Compilation failed ({} errors)", num_errors)
+            }
+            CompileError::CompilerError(error) => write!(f, "Compiler error occurred: {}", error),
+        }
+    }
+}
+
 pub fn compile<'gc, C, S>(
     mc: &Mutation<'gc>,
     mut callback: C,
     source: S,
-) -> Result<Prototype<'gc>, ()>
+) -> Result<Prototype<'gc>, CompileError>
 where
     C: FnMut(CompilerMessage<PString>),
     S: AsRef<[u8]>,
 {
+    let mut num_errors = 0;
     let mut strings = PStringInterner::default();
     let source = lex(source.as_ref(), |bytes| strings.intern(mc, bytes));
     println!("Tokens: {:?}", source.tokens);
@@ -122,6 +158,7 @@ where
     println!("Line Starts: {:?}", source.line_starts);
 
     let mut callback = |message: &dyn Display, at: Option<Span>| {
+        num_errors += 1;
         callback(CompilerMessage {
             message,
             source: &source,
@@ -136,9 +173,8 @@ where
         |bytes| strings.intern(mc, bytes),
     ) {
         Ok(ast) => ast,
-        Err(_error) => {
-            return Err(());
-        }
+        Err(ParserError::FailedParse) => return Err(CompileError::CompileFailed(num_errors)),
+        Err(error) => return Err(CompileError::from(error)),
     };
     println!("Nodes: {:?}", ast.nodes);
     println!("Locations: {:?}", ast.locations);
@@ -158,18 +194,29 @@ where
     let ast = match sem_check(|message, at| callback(message, at), ast) {
         Ok(ast) => ast,
         Err(error) => {
-            println!("{:?}", error);
-            return Err(());
+            return match error {
+                SemCheckError::FailedSemCheck => Err(CompileError::CompileFailed(num_errors)),
+                error => Err(CompileError::from(error)),
+            };
         }
     };
     println!("Bindings: {:?}", ast.bindings);
 
     match code_gen(mc, ast, strings) {
         Ok(prototype) => Ok(prototype),
-        Err(error) => {
-            println!("{:?}", error);
-            Err(())
-        }
+        Err(error) => match error {
+            CodeGenError::ExpectedNode
+            | CodeGenError::ExpectedRoot
+            | CodeGenError::ExpectedStat
+            | CodeGenError::ExpectedExpr
+            | CodeGenError::BadTransition
+            | CodeGenError::MissingBinding
+            | CodeGenError::MissingLocalRegister => Err(CompileError::CompilerError(error.into())),
+            CodeGenError::NoRegistersAvailable | CodeGenError::ConstantPoolFull => {
+                callback(&error, None);
+                Err(CompileError::CompileFailed(num_errors))
+            }
+        },
     }
 }
 

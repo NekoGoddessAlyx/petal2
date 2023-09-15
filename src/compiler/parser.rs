@@ -1,4 +1,5 @@
-use std::fmt::Display;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 
 use smallvec::{smallvec, SmallVec};
 
@@ -11,18 +12,18 @@ use crate::compiler::string::{CompileString, NewString};
 #[derive(Debug)]
 pub enum ParserError {
     FailedParse,
-    StateError(StateError),
+    BadTransition,
 }
 
-impl From<StateError> for ParserError {
-    fn from(value: StateError) -> Self {
-        Self::StateError(value)
+impl Error for ParserError {}
+
+impl Display for ParserError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParserError::FailedParse => write!(f, "Parsing failed"),
+            ParserError::BadTransition => write!(f, "Invalid state transition"),
+        }
     }
-}
-
-#[derive(Debug)]
-pub enum StateError {
-    CannotTransfer,
 }
 
 pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(
@@ -131,11 +132,11 @@ impl State {
         &mut self,
         from: Option<State>,
         parser: &mut Parser<'_, C, NS, S>,
-    ) -> Result<(), StateError> {
+    ) -> Result<(), ParserError> {
         macro_rules! fail_transfer {
             () => {{
                 dbg!(&from);
-                Err(StateError::CannotTransfer)
+                Err(ParserError::BadTransition)
             }};
         }
 
