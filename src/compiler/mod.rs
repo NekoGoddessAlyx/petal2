@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::str::from_utf8;
 
 use gc_arena::Mutation;
+use thiserror::Error;
 
 use crate::compiler::ast::Node;
 use crate::compiler::code_gen::{code_gen, CodeGenError};
@@ -105,21 +106,13 @@ impl<S> Display for CompilerMessage<'_, S> {
 
 // compile
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CompileError {
     /// The source input failed to compile
     CompileFailed(u32),
     /// An internal compiler error occurred, this is a bug and should be reported
-    CompilerError(Box<dyn Error>),
+    CompilerError(#[from] Box<dyn Error>),
 }
-
-impl CompileError {
-    fn from<T: Error + 'static>(value: T) -> Self {
-        Self::CompilerError(Box::new(value) as Box<dyn Error>)
-    }
-}
-
-impl Error for CompileError {}
 
 impl Display for CompileError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -174,7 +167,7 @@ where
     ) {
         Ok(ast) => ast,
         Err(ParserError::FailedParse) => return Err(CompileError::CompileFailed(num_errors)),
-        Err(error) => return Err(CompileError::from(error)),
+        Err(error) => return Err((Box::new(error) as Box<dyn Error>).into()),
     };
     println!("Nodes: {:?}", ast.nodes);
     println!("Locations: {:?}", ast.locations);
@@ -196,7 +189,7 @@ where
         Err(error) => {
             return match error {
                 SemCheckError::FailedSemCheck => Err(CompileError::CompileFailed(num_errors)),
-                error => Err(CompileError::from(error)),
+                error => Err((Box::new(error) as Box<dyn Error>).into()),
             };
         }
     };

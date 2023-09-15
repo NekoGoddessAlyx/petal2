@@ -1,18 +1,14 @@
 use gc_arena::Mutation;
+use thiserror::Error;
 
 use crate::instruction::Instruction;
 use crate::prototype::Prototype;
 use crate::value::{TypeError, Value};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum InterpretResult {
-    TypeError(TypeError),
-}
-
-impl From<TypeError> for InterpretResult {
-    fn from(value: TypeError) -> Self {
-        Self::TypeError(value)
-    }
+    #[error(transparent)]
+    TypeError(#[from] TypeError),
 }
 
 pub fn interpret<'gc>(

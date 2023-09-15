@@ -1,11 +1,10 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
 use gc_arena::Mutation;
 use smallvec::{smallvec, SmallVec};
+use thiserror::Error;
 
 use crate::compiler::ast::{BinOp, NodeRef, RefLen, Root, UnOp};
 use crate::compiler::registers::{Register, Registers};
@@ -20,41 +19,26 @@ type Stat<'gc> = crate::compiler::ast::Stat<PString<'gc>>;
 type Expr<'gc> = crate::compiler::ast::Expr<PString<'gc>>;
 type Binding<'gc> = Rc<crate::compiler::sem_check::Binding<PString<'gc>>>;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CodeGenError {
+    #[error("Expected ast node")]
     ExpectedNode,
+    #[error("Expected root ast node")]
     ExpectedRoot,
+    #[error("Expected stat ast node")]
     ExpectedStat,
+    #[error("Expected expr node")]
     ExpectedExpr,
+    #[error("Invalid state transition")]
     BadTransition,
+    #[error("Missing variable binding")]
     MissingBinding,
+    #[error("Local does not have a register assigned")]
     MissingLocalRegister,
+    #[error("No registers are available. Your function is too large.")]
     NoRegistersAvailable,
+    #[error("Constant pool is full. Your function is too large.")]
     ConstantPoolFull,
-}
-
-impl Error for CodeGenError {}
-
-impl Display for CodeGenError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CodeGenError::ExpectedNode => write!(f, "Expected ast node"),
-            CodeGenError::ExpectedRoot => write!(f, "Unexpected root ast node"),
-            CodeGenError::ExpectedStat => write!(f, "Unexpected stat ast node"),
-            CodeGenError::ExpectedExpr => write!(f, "Unexpected expr node"),
-            CodeGenError::BadTransition => write!(f, "Invalid state transition"),
-            CodeGenError::MissingBinding => write!(f, "Missing variable binding"),
-            CodeGenError::MissingLocalRegister => {
-                write!(f, "Local does not have a register assigned")
-            }
-            CodeGenError::NoRegistersAvailable => {
-                write!(f, "No registers are available. Your function is too large.")
-            }
-            CodeGenError::ConstantPoolFull => {
-                write!(f, "Constant pool is full. Your function is too large.")
-            }
-        }
-    }
 }
 
 pub type Result<T> = std::result::Result<T, CodeGenError>;

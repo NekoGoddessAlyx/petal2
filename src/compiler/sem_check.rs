@@ -1,11 +1,11 @@
 use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
 use smallvec::{smallvec, SmallVec};
+use thiserror::Error;
 
 use crate::compiler::ast::{Ast, Expr, Mutability, Node, NodeRef, RefLen, Root, Stat};
 use crate::compiler::callback::Callback;
@@ -37,33 +37,24 @@ impl<S: CompileString> Display for SemCheckMsg<S> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum SemCheckError {
+    #[error("SemCheck failed")]
     FailedSemCheck,
+    #[error("Unexpected ast node")]
     UnexpectedNode,
+    #[error("Expected ast node")]
     ExpectedNode,
+    #[error("Expected root ast node")]
     ExpectedRoot,
+    #[error("Expected stat ast node")]
     ExpectedStat,
+    #[error("Expected expr node")]
     ExpectedExpr,
+    #[error("Context is missing")]
     MissingContext,
+    #[error("Scope is missing")]
     MissingScope,
-}
-
-impl Error for SemCheckError {}
-
-impl Display for SemCheckError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SemCheckError::FailedSemCheck => write!(f, "SemCheck failed"),
-            SemCheckError::UnexpectedNode => write!(f, "Unexpected ast node"),
-            SemCheckError::ExpectedNode => write!(f, "Expected ast node"),
-            SemCheckError::ExpectedRoot => write!(f, "Unexpected root ast node"),
-            SemCheckError::ExpectedStat => write!(f, "Unexpected stat ast node"),
-            SemCheckError::ExpectedExpr => write!(f, "Unexpected expr node"),
-            SemCheckError::MissingContext => write!(f, "Context is missing"),
-            SemCheckError::MissingScope => write!(f, "Scope is missing"),
-        }
-    }
 }
 
 #[derive(Debug)]

@@ -1,7 +1,7 @@
-use std::error::Error;
-use std::fmt::{Display, Formatter};
+use std::fmt::Display;
 
 use smallvec::{smallvec, SmallVec};
+use thiserror::Error;
 
 use crate::compiler::ast::{Ast, AstBuilder, BinOp, Mutability, NodeRef, Root, Stat, UnOp};
 use crate::compiler::ast::{Expr, RefLen};
@@ -9,21 +9,12 @@ use crate::compiler::callback::Callback;
 use crate::compiler::lexer::{Span, Token};
 use crate::compiler::string::{CompileString, NewString};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ParserError {
+    #[error("Parsing failed")]
     FailedParse,
+    #[error("Invalid state transition")]
     BadTransition,
-}
-
-impl Error for ParserError {}
-
-impl Display for ParserError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ParserError::FailedParse => write!(f, "Parsing failed"),
-            ParserError::BadTransition => write!(f, "Invalid state transition"),
-        }
-    }
 }
 
 pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(

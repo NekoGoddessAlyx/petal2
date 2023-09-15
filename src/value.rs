@@ -2,6 +2,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 
 use gc_arena::{Collect, Mutation};
+use thiserror::Error;
 
 use crate::PString;
 
@@ -73,7 +74,9 @@ impl Hash for Value<'_> {
     }
 }
 
-#[derive(Debug)]
+// TODO: needs info
+#[derive(Debug, Error)]
+#[error("TypeError")]
 pub struct TypeError;
 
 impl std::ops::Neg for Value<'_> {
