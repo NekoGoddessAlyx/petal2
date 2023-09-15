@@ -1,19 +1,19 @@
 use std::fmt::{Result, Write};
 
-pub struct PrettyFormatter<'a> {
-    w: &'a mut dyn Write,
+pub struct PrettyFormatter<'a, W> {
+    w: &'a mut W,
     indent: &'a str,
     was_nl: bool,
     indent_level: usize,
 }
 
 #[allow(unused)]
-impl<'a> PrettyFormatter<'a> {
-    pub fn new(w: &'a mut dyn Write) -> Self {
+impl<'a, W: Write> PrettyFormatter<'a, W> {
+    pub fn new(w: &'a mut W) -> Self {
         Self::new_with_indent(w, "    ")
     }
 
-    pub fn new_with_indent(w: &'a mut dyn Write, indent: &'a str) -> Self {
+    pub fn new_with_indent(w: &'a mut W, indent: &'a str) -> Self {
         Self {
             w,
             indent,
@@ -40,7 +40,7 @@ impl<'a> PrettyFormatter<'a> {
     }
 }
 
-impl Write for PrettyFormatter<'_> {
+impl<W: Write> Write for PrettyFormatter<'_, W> {
     fn write_str(&mut self, s: &str) -> Result {
         for s in s.split_inclusive('\n') {
             if self.was_nl {

@@ -490,20 +490,21 @@ mod display {
         }
     }
 
-    pub struct AstPrettyPrinter<'formatter, I> {
-        f: PrettyFormatter<'formatter>,
+    pub struct AstPrettyPrinter<'formatter, W, I> {
+        f: PrettyFormatter<'formatter, W>,
         nodes: I,
         state: SmallVec<[State; 16]>,
     }
 
-    impl<I> Write for AstPrettyPrinter<'_, I> {
+    impl<W: Write, I> Write for AstPrettyPrinter<'_, W, I> {
         fn write_str(&mut self, s: &str) -> std::fmt::Result {
             self.f.write_str(s)
         }
     }
 
-    impl<'formatter, 'ast, I, S> AstPrettyPrinter<'formatter, I>
+    impl<'formatter, 'ast, W, I, S> AstPrettyPrinter<'formatter, W, I>
     where
+        W: Write,
         I: Iterator<Item = &'ast Node<S>>,
         S: Display + 'ast,
     {
