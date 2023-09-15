@@ -376,21 +376,21 @@ where
             }
         }
 
-        struct StringError;
+        struct UnterminatedString;
 
         let mut try_read_string = || {
             self.buffer.clear();
             loop {
-                let c1 = self.peek(0).ok_or(StringError)?;
+                let c1 = self.peek(0).ok_or(UnterminatedString)?;
                 if matches!(c1, b'\r' | b'\n') {
-                    return Err(StringError);
+                    return Err(UnterminatedString);
                 }
 
                 self.advance(1);
                 match c1 {
                     // escape
                     b'\\' => {
-                        let c2 = self.peek(0).ok_or(StringError)?;
+                        let c2 = self.peek(0).ok_or(UnterminatedString)?;
                         match char_escape(c2) {
                             None => {
                                 self.advance(1);
