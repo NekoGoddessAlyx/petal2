@@ -15,7 +15,7 @@ fn main() {
         let compile_result = compile(mc, callback, source);
         let function = match compile_result {
             Ok(prototype) => {
-                println!("Prototype: {:#?}", prototype);
+                println!("Prototype: {}", prototype);
                 prototype
             }
             Err(_) => {

@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 pub type RIndex = u8;
 pub type CIndex8 = u8;
 pub type CIndex16 = u16;
@@ -128,3 +130,167 @@ pub enum Instruction {
 }
 
 static_assert_size!(Instruction, 4);
+
+impl Instruction {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Instruction::ReturnR { .. } => "RETURN_R",
+            Instruction::ReturnC { .. } => "RETURN_C",
+            Instruction::LoadR { .. } => "LOAD_R",
+            Instruction::LoadC { .. } => "LOAD_C",
+            Instruction::LoadI { .. } => "LOAD_I",
+            Instruction::NegR { .. } => "NEG_R",
+            Instruction::NegC { .. } => "NEG_C",
+            Instruction::NotR { .. } => "NOT_R",
+            Instruction::NotC { .. } => "NOT_C",
+            Instruction::AddRR { .. } => "ADD_RR",
+            Instruction::AddRC { .. } => "ADD_RC",
+            Instruction::AddCC { .. } => "ADD_CC",
+            Instruction::AddCR { .. } => "ADD_CR",
+            Instruction::SubRR { .. } => "SUB_RR",
+            Instruction::SubRC { .. } => "SUB_RC",
+            Instruction::SubCC { .. } => "SUB_CC",
+            Instruction::SubCR { .. } => "SUB_CR",
+            Instruction::MulRR { .. } => "MUL_RR",
+            Instruction::MulRC { .. } => "MUL_RC",
+            Instruction::MulCC { .. } => "MUL_CC",
+            Instruction::MulCR { .. } => "MUL_CR",
+            Instruction::DivRR { .. } => "DIV_RR",
+            Instruction::DivRC { .. } => "DIV_RC",
+            Instruction::DivCC { .. } => "DIV_CC",
+            Instruction::DivCR { .. } => "DIV_CR",
+        }
+    }
+}
+
+impl Display for Instruction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:<8} ", self.name())?;
+        match self {
+            Instruction::ReturnR { register } => {
+                write!(f, "{:4}          ", register)
+            }
+
+            Instruction::ReturnC { constant } => {
+                write!(f, "{:4}          ", constant)
+            }
+
+            Instruction::LoadR {
+                destination,
+                from: right,
+            }
+            | Instruction::NegR { destination, right }
+            | Instruction::NotR { destination, right } => {
+                write!(f, "{:4} {:4}     ", destination, right)
+            }
+
+            Instruction::LoadC {
+                destination,
+                constant: right,
+            }
+            | Instruction::NegC { destination, right }
+            | Instruction::NotC { destination, right } => {
+                write!(f, "{:4} {:4}     ", destination, right)
+            }
+
+            Instruction::LoadI {
+                destination,
+                integer,
+            } => {
+                write!(f, "{:4} {:9}", destination, integer)
+            }
+
+            Instruction::AddRR {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::SubRR {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::MulRR {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::DivRR {
+                destination,
+                left,
+                right,
+            } => {
+                write!(f, "{:4} {:4} {:4}", destination, left, right)
+            }
+
+            Instruction::AddRC {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::SubRC {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::MulRC {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::DivRC {
+                destination,
+                left,
+                right,
+            } => {
+                write!(f, "{:4} {:4} {:4}", destination, left, right)
+            }
+
+            Instruction::AddCC {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::SubCC {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::MulCC {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::DivCC {
+                destination,
+                left,
+                right,
+            } => {
+                write!(f, "{:4} {:4} {:4}", destination, left, right)
+            }
+
+            Instruction::AddCR {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::SubCR {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::MulCR {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::DivCR {
+                destination,
+                left,
+                right,
+            } => {
+                write!(f, "{:4} {:4} {:4}", destination, left, right)
+            }
+        }
+    }
+}
