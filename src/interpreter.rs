@@ -53,6 +53,8 @@ pub fn interpret<'gc>(
     // the validity of instructions has already been checked above
     // That is: instructions len is non-zero AND it ends in a return statement
     // (thus execution cannot continue past the end of the instructions)
+    //
+    // as for constants: 😐 trust the compiler that things won't burn down
     unsafe {
         loop {
             let instruction = *instructions.get_unchecked(pc);
