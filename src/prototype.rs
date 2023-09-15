@@ -1,10 +1,13 @@
 use std::fmt::{Display, Formatter};
 
+use gc_arena::Collect;
+
 use crate::instruction::Instruction;
 use crate::value::Value;
 use crate::PString;
 
-#[derive(Debug)]
+#[derive(Debug, Collect)]
+#[collect(no_drop)]
 pub struct Prototype<'gc> {
     pub name: PString<'gc>,
     pub stack_size: u8,

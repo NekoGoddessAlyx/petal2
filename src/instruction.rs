@@ -1,10 +1,13 @@
 use std::fmt::{Display, Formatter};
 
+use gc_arena::Collect;
+
 pub type RIndex = u8;
 pub type CIndex8 = u8;
 pub type CIndex16 = u16;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Collect)]
+#[collect(require_static)]
 pub enum Instruction {
     ReturnR {
         register: RIndex,

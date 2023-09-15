@@ -1,11 +1,12 @@
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 
-use gc_arena::Mutation;
+use gc_arena::{Collect, Mutation};
 
 use crate::PString;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Collect)]
+#[collect(no_drop)]
 pub enum Value<'gc> {
     Null,
     Boolean(bool),
