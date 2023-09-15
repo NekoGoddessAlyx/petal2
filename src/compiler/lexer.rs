@@ -11,17 +11,25 @@ use crate::compiler::string::{CompileString, NewString};
 pub enum LexerErr {
     UnexpectedCharacter(u8),
     FailedNumberParse,
+    UnknownCharacterEscape(u8),
+    UnterminatedString,
 }
 
 impl Display for LexerErr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
+        let to_char = |c: u8| char::from_u32(c as u32).unwrap_or(char::REPLACEMENT_CHARACTER);
+        match *self {
             LexerErr::UnexpectedCharacter(c) => {
-                let char = char::from_u32(*c as u32).unwrap_or(char::REPLACEMENT_CHARACTER);
-                write!(f, "Unexpected character '{}'", char)
+                write!(f, "Unexpected character '{}'", to_char(c))
             }
             LexerErr::FailedNumberParse => {
                 write!(f, "Failed to parse number")
+            }
+            LexerErr::UnknownCharacterEscape(c) => {
+                write!(f, "Unknown character escape '\\{}'", to_char(c))
+            }
+            LexerErr::UnterminatedString => {
+                write!(f, "Unterminated string")
             }
         }
     }
@@ -52,6 +60,7 @@ pub enum Token<S> {
 
     Integer(i64),
     Float(f64),
+    String(S),
 
     Identifier(S),
 
@@ -223,6 +232,20 @@ where
         self.push_token(Token::Err(err));
     }
 
+    fn on_error_at_last_char(&mut self, err: LexerErr) {
+        self.tokens.push(Token::Err(err));
+        self.locations.push(Span {
+            start: self.cursor.end.saturating_sub(1),
+            end: self.cursor.end,
+        });
+    }
+
+    fn take_string(&mut self) -> S {
+        let s = (self.new_string)(&self.buffer);
+        self.buffer.clear();
+        s
+    }
+
     fn peek(&self, n: usize) -> Option<u8> {
         self.source.get(self.cursor.end as usize + n).copied()
     }
@@ -326,6 +349,10 @@ where
                 self.advance(1);
                 self.push_token(Token::Div);
             }
+            Some(b'"') => {
+                self.advance(1);
+                self.read_string();
+            }
             Some(c) if c.is_ascii_digit() => self.read_number(),
             Some(c) if c.is_ascii_alphabetic() => self.read_identifier(),
             Some(c) => {
@@ -333,6 +360,71 @@ where
                 self.on_error(LexerErr::UnexpectedCharacter(c));
             }
             None => {}
+        }
+    }
+
+    fn read_string(&mut self) {
+        fn char_escape(c: u8) -> Option<u8> {
+            match c {
+                b'0' => Some(b'\0'),
+                b'b' => Some(0x08),
+                b't' => Some(b'\t'),
+                b'r' => Some(b'\r'),
+                b'n' => Some(b'\n'),
+                b'\\' | b'"' => Some(c),
+                _ => None,
+            }
+        }
+
+        struct StringError;
+
+        let mut try_read_string = || {
+            self.buffer.clear();
+            loop {
+                let c1 = self.peek(0).ok_or(StringError)?;
+                if matches!(c1, b'\r' | b'\n') {
+                    return Err(StringError);
+                }
+
+                self.advance(1);
+                match c1 {
+                    // escape
+                    b'\\' => {
+                        let c2 = self.peek(0).ok_or(StringError)?;
+                        match char_escape(c2) {
+                            None => {
+                                self.advance(1);
+                                self.buffer.push(c1);
+                                self.buffer.push(c2);
+                                self.on_error_at_last_char(LexerErr::UnknownCharacterEscape(c2));
+                            }
+                            Some(ce) => {
+                                self.advance(1);
+                                self.buffer.push(ce);
+                            }
+                        }
+                    }
+
+                    // string end
+                    b'"' => {
+                        let string = self.take_string();
+                        self.push_token(Token::String(string));
+                        return Ok(());
+                    }
+
+                    // any other char
+                    c1 => self.buffer.push(c1),
+                }
+            }
+        };
+
+        match try_read_string() {
+            Ok(_) => {}
+            Err(_) => {
+                self.on_error(LexerErr::UnterminatedString);
+                let string = self.take_string();
+                self.push_token(Token::String(string));
+            }
         }
     }
 
@@ -394,8 +486,8 @@ where
             }
         }
 
-        let string = self.buffer.as_slice();
-        match string {
+        let string = self.take_string();
+        match string.as_ref() {
             b"val" => {
                 self.push_token(Token::Val);
             }
@@ -415,7 +507,6 @@ where
                 self.push_token(Token::False);
             }
             _ => {
-                let string = (self.new_string)(string);
                 self.push_token(Token::Identifier(string));
             }
         }

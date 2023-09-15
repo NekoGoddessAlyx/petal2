@@ -708,6 +708,13 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 let left = self.push_expression(push_expr, Expr::Float(v), expr_location);
                 self.push_state(State::BeginExpressionInfix { precedence, left });
             }
+            Token::String(ref v) => {
+                let v = v.clone();
+                let expr_location = self.peek_location();
+                self.advance();
+                let left = self.push_expression(push_expr, Expr::String(v), expr_location);
+                self.push_state(State::BeginExpressionInfix { precedence, left });
+            }
             Token::Identifier(ref name) => {
                 let name = name.clone();
                 let var_location = self.peek_location();
@@ -885,6 +892,7 @@ impl<S> Token<S> {
             | Token::Bang
             | Token::Integer(_)
             | Token::Float(_)
+            | Token::String(_)
             | Token::Identifier(_) => true,
             _ => false,
         }

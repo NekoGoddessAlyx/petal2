@@ -611,6 +611,13 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
 
                 Ok(())
             }
+            // TODO: implement string values
+            Expr::String(_) => {
+                let dest = self.push_constant_to_register(Value::Null, dest)?;
+                self.push_state(State::ExitExpr(dest.into()));
+
+                Ok(())
+            }
             Expr::Var { assignment, .. } => {
                 let binding = self
                     .bindings

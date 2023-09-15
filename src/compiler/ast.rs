@@ -11,7 +11,7 @@ pub struct Ast<S> {
     pub locations: Box<[Span]>,
 }
 
-impl<S: Display> Display for Ast<S> {
+impl<S: CompileString> Display for Ast<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write_ast(self, f)
     }
@@ -76,6 +76,7 @@ pub enum Expr<S> {
     Bool(bool),
     Integer(i64),
     Float(f64),
+    String(S),
     Var { name: S, assignment: bool },
     Return { right: bool },
     UnOp { op: UnOp },
@@ -424,14 +425,15 @@ impl<S: CompileString> AstBuilder<S> {
 // display
 
 mod display {
-    use std::fmt::{Display, Error, Formatter, Write};
+    use std::fmt::{Debug, Error, Formatter, Write};
 
     use smallvec::{smallvec, SmallVec};
 
     use crate::compiler::ast::{Ast, BinOp, Expr, Mutability, Node, RefLen, Root, Stat, UnOp};
+    use crate::compiler::string::CompileString;
     use crate::pretty_formatter::PrettyFormatter;
 
-    pub fn write_ast<S: Display>(ast: &Ast<S>, f: &mut Formatter<'_>) -> std::fmt::Result {
+    pub fn write_ast<S: CompileString>(ast: &Ast<S>, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut pretty_formatter = AstPrettyPrinter {
             f: PrettyFormatter::new(f),
             nodes: ast.nodes.iter(),
@@ -506,7 +508,7 @@ mod display {
     where
         W: Write,
         I: Iterator<Item = &'ast Node<S>>,
-        S: Display + 'ast,
+        S: CompileString + 'ast,
     {
         #[inline]
         fn indent(&mut self) {
@@ -609,6 +611,7 @@ mod display {
                         Expr::Bool(false) => write!(self, "false")?,
                         Expr::Integer(v) => write!(self, "{}", v)?,
                         Expr::Float(v) => write!(self, "{}", v)?,
+                        Expr::String(ref v) => write!(self, "{:?}", v)?,
                         Expr::Var {
                             ref name,
                             assignment,
