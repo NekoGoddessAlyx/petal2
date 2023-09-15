@@ -1,3 +1,5 @@
+use gc_arena::Mutation;
+
 use crate::instruction::Instruction;
 use crate::prototype::Prototype;
 use crate::value::{TypeError, Value};
@@ -13,7 +15,10 @@ impl From<TypeError> for InterpretResult {
     }
 }
 
-pub fn interpret(function: Prototype) -> Result<Value, InterpretResult> {
+pub fn interpret<'gc>(
+    mc: &Mutation<'gc>,
+    function: Prototype<'gc>,
+) -> Result<Value<'gc>, InterpretResult> {
     let instructions = function.instructions.as_ref();
     #[allow(unused)]
     let constants = function.constants.as_ref();
@@ -77,22 +82,22 @@ pub fn interpret(function: Prototype) -> Result<Value, InterpretResult> {
                     destination,
                     left,
                     right,
-                } => mov!(destination, (peek!(left) + peek!(right))?),
+                } => mov!(destination, peek!(left).add(mc, peek!(right))?),
                 Instruction::AddRC {
                     destination,
                     left,
                     right,
-                } => mov!(destination, (peek!(left) + constant!(right))?),
+                } => mov!(destination, peek!(left).add(mc, constant!(right))?),
                 Instruction::AddCR {
                     destination,
                     left,
                     right,
-                } => mov!(destination, (constant!(left) + peek!(right))?),
+                } => mov!(destination, constant!(left).add(mc, peek!(right))?),
                 Instruction::AddCC {
                     destination,
                     left,
                     right,
-                } => mov!(destination, (constant!(left) + constant!(right))?),
+                } => mov!(destination, constant!(left).add(mc, constant!(right))?),
 
                 Instruction::SubRR {
                     destination,

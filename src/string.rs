@@ -2,12 +2,15 @@ use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::io::{Error, Write};
 use std::ops::Deref;
 use std::ptr::slice_from_raw_parts;
 use std::str::{from_utf8, Utf8Error};
 
 use gc_arena::{Collect, Gc, Mutation};
 use smallvec::SmallVec;
+
+use crate::value::Value;
 
 pub trait StringInterner<'gc> {
     type String: AsRef<[u8]> + Clone;
@@ -20,6 +23,13 @@ pub trait StringInterner<'gc> {
 pub enum StringError {
     TooLongForShortString(usize),
     TooLongForStaticString(usize),
+    WriteErr(Error),
+}
+
+impl From<Error> for StringError {
+    fn from(value: Error) -> Self {
+        Self::WriteErr(value)
+    }
 }
 
 impl Display for StringError {
@@ -40,6 +50,7 @@ impl Display for StringError {
                     u32::MAX
                 )
             }
+            StringError::WriteErr(err) => write!(f, "{}", err),
         }
     }
 }
@@ -143,6 +154,38 @@ impl<'gc> PString<'gc> {
     /// The String is not allocated.
     pub fn empty() -> Self {
         Self(StringData::Short(0, [0; SHORT_LEN]))
+    }
+
+    pub fn try_concat<I: IntoIterator<Item = V>, V: Into<Value<'gc>>>(
+        mc: &Mutation<'gc>,
+        values: I,
+    ) -> Result<Self, StringError> {
+        let mut bytes: SmallVec<[u8; SHORT_LEN]> = SmallVec::new();
+        for value in values.into_iter() {
+            match value.into() {
+                Value::Null => write!(&mut bytes, "null")?,
+                Value::Boolean(true) => write!(&mut bytes, "true")?,
+                Value::Boolean(false) => write!(&mut bytes, "false")?,
+                Value::Integer(v) => write!(&mut bytes, "{}", v)?,
+                Value::Float(v) => write!(&mut bytes, "{}", v)?,
+                Value::String(v) => bytes.extend_from_slice(v.as_bytes()),
+            }
+        }
+        Ok(match bytes.len() {
+            len @ 0..=SHORT_LEN => {
+                bytes.resize(SHORT_LEN, 0);
+                let bytes = bytes.into_inner().unwrap();
+                Self(StringData::Short(len as u8, bytes))
+            }
+            _ => Self(StringData::Long(Gc::new(mc, bytes.into_boxed_slice()))),
+        })
+    }
+
+    pub fn try_concat_from_slice(
+        mc: &Mutation<'gc>,
+        values: &[Value<'gc>],
+    ) -> Result<Self, StringError> {
+        Self::try_concat(mc, values.iter().copied())
     }
 
     pub fn len(&self) -> usize {

@@ -24,7 +24,7 @@ fn main() {
             }
         };
 
-        match interpret(function) {
+        match interpret(mc, function) {
             Ok(result) => {
                 println!("Result: {:?}", result);
             }

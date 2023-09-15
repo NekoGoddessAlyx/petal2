@@ -72,8 +72,8 @@ struct PrototypeBuilder<'gc> {
     name: PString<'gc>,
     registers: Registers,
     instructions: Vec<Instruction>,
-    constants_map: HashMap<Value, CIndex>,
-    constants: Vec<Value>,
+    constants_map: HashMap<Value<'gc>, CIndex>,
+    constants: Vec<Value<'gc>>,
 }
 
 impl<'gc> PrototypeBuilder<'gc> {
@@ -338,7 +338,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
 
     fn push_constant_to_register(
         &mut self,
-        constant: Value,
+        constant: Value<'gc>,
         dest: ExprDest,
     ) -> Result<MaybeTempRegister> {
         let dest = self.allocate(dest)?;
@@ -380,7 +380,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         self.current_function.instructions.push(instruction);
     }
 
-    fn push_constant(&mut self, constant: Value) -> Result<CIndex> {
+    fn push_constant(&mut self, constant: Value<'gc>) -> Result<CIndex> {
         Ok(match self.current_function.constants_map.entry(constant) {
             Entry::Occupied(entry) => *entry.get(),
             Entry::Vacant(entry) => {
@@ -527,7 +527,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         self.consume_expr_anywhere(node, expr)
     }
 
-    fn consume_expr_anywhere(&mut self, node: NodeRef, expr: &'ast Expr) -> Result<()> {
+    fn consume_expr_anywhere(&mut self, node: NodeRef, expr: &'ast Expr<'gc>) -> Result<()> {
         match *expr {
             Expr::Integer(v) => {
                 let constant = self.push_constant(Value::Integer(v))?;
@@ -585,7 +585,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         self.consume_expr(node, expr, dest)
     }
 
-    fn consume_expr(&mut self, node: NodeRef, expr: &'ast Expr, dest: ExprDest) -> Result<()> {
+    fn consume_expr(&mut self, node: NodeRef, expr: &'ast Expr<'gc>, dest: ExprDest) -> Result<()> {
         match *expr {
             Expr::Null => {
                 let dest = self.push_constant_to_register(Value::Null, dest)?;
@@ -611,9 +611,8 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
 
                 Ok(())
             }
-            // TODO: implement string values
-            Expr::String(_) => {
-                let dest = self.push_constant_to_register(Value::Null, dest)?;
+            Expr::String(v) => {
+                let dest = self.push_constant_to_register(Value::String(v), dest)?;
                 self.push_state(State::ExitExpr(dest.into()));
 
                 Ok(())

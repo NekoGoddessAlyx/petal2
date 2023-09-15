@@ -9,7 +9,7 @@ pub struct Prototype<'gc> {
     pub name: PString<'gc>,
     pub stack_size: u8,
     pub instructions: Box<[Instruction]>,
-    pub constants: Box<[Value]>,
+    pub constants: Box<[Value<'gc>]>,
 }
 
 impl Display for Prototype<'_> {
