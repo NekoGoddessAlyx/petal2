@@ -156,7 +156,8 @@ impl<'gc> PString<'gc> {
         Self(StringData::Short(0, [0; SHORT_LEN]))
     }
 
-    pub fn try_concat<I: IntoIterator<Item = V>, V: Into<Value<'gc>>>(
+    /// Concatenates constants (Null, Booleans, Numbers, Strings)
+    pub fn concat_from_iter<I: IntoIterator<Item = V>, V: Into<Value<'gc>>>(
         mc: &Mutation<'gc>,
         values: I,
     ) -> Result<Self, StringError> {
@@ -172,20 +173,23 @@ impl<'gc> PString<'gc> {
             }
         }
         Ok(match bytes.len() {
-            len @ 0..=SHORT_LEN => {
+            0 => Self::empty(),
+            len @ ..=SHORT_LEN => {
                 bytes.resize(SHORT_LEN, 0);
-                let bytes = bytes.into_inner().unwrap();
+                // SAFETY: exact size just set
+                let bytes = unsafe { bytes.into_inner().unwrap_unchecked() };
                 Self(StringData::Short(len as u8, bytes))
             }
             _ => Self(StringData::Long(Gc::new(mc, bytes.into_boxed_slice()))),
         })
     }
 
-    pub fn try_concat_from_slice(
+    /// Concatenates constants (Null, Booleans, Numbers, Strings)
+    pub fn concat_from_slice(
         mc: &Mutation<'gc>,
         values: &[Value<'gc>],
     ) -> Result<Self, StringError> {
-        Self::try_concat(mc, values.iter().copied())
+        Self::concat_from_iter(mc, values.iter().copied())
     }
 
     pub fn len(&self) -> usize {

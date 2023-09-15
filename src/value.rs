@@ -22,7 +22,7 @@ impl<'gc> Value<'gc> {
             (Value::Float(a), Value::Integer(b)) => Value::Float(a + (b as f64)),
             (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
             (a @ Value::String(_), b) | (a, b @ Value::String(_)) => {
-                Value::String(PString::try_concat_from_slice(mc, &[a, b]).map_err(|_| TypeError)?)
+                Value::String(PString::concat_from_slice(mc, &[a, b]).map_err(|_| TypeError)?)
             }
             _ => return Err(TypeError),
         })
