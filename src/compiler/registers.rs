@@ -51,7 +51,7 @@ impl Registers {
             "Register {} must be allocated",
             register.0
         );
-        self.locals[local.0 as usize] = register.0
+        self.locals[local.0 as usize] = register.0;
     }
 
     /// Returns the register assigned to a given local.

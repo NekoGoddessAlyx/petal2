@@ -116,7 +116,7 @@ impl NodeRef {
 
 impl std::ops::SubAssign<u32> for NodeRef {
     fn sub_assign(&mut self, rhs: u32) {
-        self.0 -= rhs
+        self.0 -= rhs;
     }
 }
 
@@ -159,13 +159,13 @@ impl std::ops::Add<u32> for RefLen {
 
 impl std::ops::AddAssign<u32> for RefLen {
     fn add_assign(&mut self, rhs: u32) {
-        self.0 += rhs
+        self.0 += rhs;
     }
 }
 
 impl std::ops::SubAssign<u32> for RefLen {
     fn sub_assign(&mut self, rhs: u32) {
-        self.0 -= rhs
+        self.0 -= rhs;
     }
 }
 

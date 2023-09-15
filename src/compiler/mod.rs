@@ -90,7 +90,7 @@ impl<S> Display for CompilerMessage<'_, S> {
                         const EMPTY: &str = "";
 
                         writeln!(f)?;
-                        write!(f, "{EMPTY:-indent$}| {EMPTY:padding$}{EMPTY:^>caret_len$}")?
+                        write!(f, "{EMPTY:-indent$}| {EMPTY:padding$}{EMPTY:^>caret_len$}")?;
                     }
                 }
                 None => {

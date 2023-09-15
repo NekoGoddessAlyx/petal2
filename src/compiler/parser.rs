@@ -604,7 +604,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                     self.push_state(State::BeginExpression {
                         push_expr: PushExpr::ReturnExprRight(left),
                         precedence: Precedence::root(),
-                    })
+                    });
                 }
             }
             Token::Null => {
