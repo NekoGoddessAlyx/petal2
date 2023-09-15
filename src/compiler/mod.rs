@@ -34,7 +34,6 @@ pub struct CompilerMessage<'compiler, S> {
     at: Option<Span>,
 }
 
-#[allow(unused)]
 impl<S> CompilerMessage<'_, S> {
     pub fn message(&self) -> &dyn Display {
         self.message

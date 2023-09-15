@@ -7,7 +7,6 @@ pub struct PrettyFormatter<'a, W> {
     indent_level: usize,
 }
 
-#[allow(unused)]
 impl<'a, W: Write> PrettyFormatter<'a, W> {
     pub fn new(w: &'a mut W) -> Self {
         Self::new_with_indent(w, "    ")
