@@ -416,7 +416,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
 
     fn finish(&mut self) -> Result<()> {
         // implicit return
-        let constant = self.push_constant(Value::Integer(0))?;
+        let constant = self.push_constant(Value::Null)?;
         self.push_instruction(Instruction::ReturnC {
             constant: constant.into(),
         });
