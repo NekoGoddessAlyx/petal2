@@ -10,7 +10,7 @@ use std::str::{from_utf8, Utf8Error};
 use gc_arena::{Collect, Gc, Mutation};
 use smallvec::SmallVec;
 
-use crate::value::Value;
+use crate::value::{IntoValue, Value};
 
 pub trait StringInterner<'gc> {
     type String: AsRef<[u8]> + Clone;
@@ -157,13 +157,13 @@ impl<'gc> PString<'gc> {
     }
 
     /// Concatenates constants (Null, Booleans, Numbers, Strings)
-    pub fn concat_from_iter<I: IntoIterator<Item = V>, V: Into<Value<'gc>>>(
+    pub fn concat_from_iter<I: IntoIterator<Item = V>, V: IntoValue<'gc>>(
         mc: &Mutation<'gc>,
         values: I,
     ) -> Result<Self, StringError> {
         let mut bytes: SmallVec<[u8; SHORT_LEN]> = SmallVec::new();
         for value in values.into_iter() {
-            match value.into() {
+            match value.into_value(mc) {
                 Value::Null => write!(&mut bytes, "null")?,
                 Value::Boolean(true) => write!(&mut bytes, "true")?,
                 Value::Boolean(false) => write!(&mut bytes, "false")?,

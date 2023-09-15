@@ -172,3 +172,233 @@ impl Display for Value<'_> {
 }
 
 static_assert_size!(Value, 16);
+
+impl From<()> for Value<'_> {
+    #[inline]
+    fn from(_: ()) -> Self {
+        Self::Null
+    }
+}
+
+impl From<bool> for Value<'_> {
+    #[inline]
+    fn from(value: bool) -> Self {
+        Self::Boolean(value)
+    }
+}
+
+impl From<i64> for Value<'_> {
+    #[inline]
+    fn from(value: i64) -> Self {
+        Self::Integer(value)
+    }
+}
+
+impl From<f64> for Value<'_> {
+    #[inline]
+    fn from(value: f64) -> Self {
+        Self::Float(value)
+    }
+}
+
+impl<'gc> From<PString<'gc>> for Value<'gc> {
+    #[inline]
+    fn from(value: PString<'gc>) -> Self {
+        Self::String(value)
+    }
+}
+
+pub trait IntoValue<'gc> {
+    fn into_value(self, mc: &Mutation<'gc>) -> Value<'gc>;
+}
+
+impl<'gc> IntoValue<'gc> for Value<'gc> {
+    #[inline]
+    fn into_value(self, _: &Mutation<'gc>) -> Value<'gc> {
+        self
+    }
+}
+
+macro_rules! impl_into {
+    ($($t: ty),* $(,)?) => {
+        $(
+            impl<'gc> IntoValue<'gc> for $t {
+                #[inline]
+                fn into_value(self, _: &Mutation<'gc>) -> Value<'gc> {
+                    self.into()
+                }
+            }
+        )*
+    };
+}
+impl_into!((), bool, i64, f64, PString<'gc>,);
+
+macro_rules! impl_into_integer {
+    ($($t: ty),* $(,)?) => {
+        $(
+            impl<'gc> IntoValue<'gc> for $t {
+                #[inline]
+                fn into_value(self, _: &Mutation<'gc>) -> Value<'gc> {
+                    Value::Integer(self.into())
+                }
+            }
+        )*
+    };
+}
+impl_into_integer!(u8, i8, u16, i16, u32, i32);
+
+impl<'gc> IntoValue<'gc> for f32 {
+    #[inline]
+    fn into_value(self, _: &Mutation<'gc>) -> Value<'gc> {
+        Value::Float(self.into())
+    }
+}
+
+macro_rules! impl_copy_into {
+    ($($t: ty),* $(,)?) => {
+        $(
+            impl<'a, 'gc> IntoValue<'gc> for &'a $t {
+                #[inline]
+                fn into_value(self, mc: &Mutation<'gc>) -> Value<'gc> {
+                    (*self).into_value(mc)
+                }
+            }
+        )*
+    };
+}
+impl_copy_into!(
+    (),
+    bool,
+    u8,
+    i8,
+    u16,
+    i16,
+    u32,
+    i32,
+    i64,
+    f32,
+    f64,
+    PString<'gc>,
+);
+
+impl<'gc> IntoValue<'gc> for &'static str {
+    fn into_value(self, mc: &Mutation<'gc>) -> Value<'gc> {
+        Value::String(PString::try_from_static(self).unwrap_or_else(|_| PString::new(mc, self)))
+    }
+}
+
+impl<'gc> IntoValue<'gc> for &'static [u8] {
+    fn into_value(self, mc: &Mutation<'gc>) -> Value<'gc> {
+        Value::String(PString::try_from_static(self).unwrap_or_else(|_| PString::new(mc, self)))
+    }
+}
+
+impl<'gc> IntoValue<'gc> for String {
+    fn into_value(self, mc: &Mutation<'gc>) -> Value<'gc> {
+        Value::String(PString::new(mc, &self))
+    }
+}
+
+impl<'gc, T: IntoValue<'gc>> IntoValue<'gc> for Option<T> {
+    fn into_value(self, mc: &Mutation<'gc>) -> Value<'gc> {
+        match self {
+            None => Value::Null,
+            Some(v) => v.into_value(mc),
+        }
+    }
+}
+
+impl<'a, 'gc, T> IntoValue<'gc> for &'a Option<T>
+where
+    &'a T: IntoValue<'gc>,
+{
+    fn into_value(self, mc: &Mutation<'gc>) -> Value<'gc> {
+        match self {
+            None => Value::Null,
+            Some(v) => v.into_value(mc),
+        }
+    }
+}
+
+pub trait FromValue<'gc>: Sized {
+    fn from_value(value: Value<'gc>) -> Result<Self, TypeError>;
+}
+
+impl<'gc> FromValue<'gc> for Value<'gc> {
+    fn from_value(value: Value<'gc>) -> Result<Self, TypeError> {
+        Ok(value)
+    }
+}
+
+macro_rules! impl_integer_from {
+    ($($t: ty),* $(,)?) => {
+        $(
+            impl<'gc> FromValue<'gc> for $t {
+                fn from_value(value: Value<'gc>) -> Result<Self, TypeError> {
+                    match value {
+                        Value::Integer(v) => v.try_into().map_err(|_| TypeError),
+                        Value::Float(v) => {
+                            let v_i = v as i64;
+                            match (v_i as f64) == v {
+                                true => v_i.try_into().map_err(|_| TypeError),
+                                false => Err(TypeError),
+                            }
+                        }
+                        Value::String(v) => {
+                            let s = std::str::from_utf8(v.as_bytes()).map_err(|_| TypeError)?;
+                            str::parse(s).map_err(|_| TypeError)
+                        }
+                        _ => Err(TypeError),
+                    }
+                }
+            }
+        )*
+    };
+}
+impl_integer_from!(u8, i8, u16, i16, u32, i32, u64, i64);
+
+macro_rules! impl_float_from {
+    ($($t: ty),* $(,)?) => {
+        $(
+            impl<'gc> FromValue<'gc> for $t {
+                fn from_value(value: Value<'gc>) -> Result<Self, TypeError> {
+                    match value {
+                        Value::Integer(v) => Ok(v as $t),
+                        Value::Float(v) => Ok(v as $t),
+                        Value::String(v) => {
+                            let s = std::str::from_utf8(v.as_bytes()).map_err(|_| TypeError)?;
+                            str::parse(s).map_err(|_| TypeError)
+                        }
+                        _ => Err(TypeError),
+                    }
+                }
+            }
+        )*
+    };
+}
+impl_float_from!(f32, f64);
+
+impl<'gc> FromValue<'gc> for () {
+    fn from_value(value: Value<'gc>) -> Result<Self, TypeError> {
+        match value {
+            Value::Null => Ok(()),
+            _ => Err(TypeError),
+        }
+    }
+}
+
+macro_rules! impl_from {
+    ($($v: ident -> $t: ty),* $(,)?) => {
+        $(
+            impl<'gc> FromValue<'gc> for $t {
+                fn from_value(value: Value<'gc>) -> Result<Self, TypeError> {
+                    match value {
+                        Value::$v(v) => Ok(v),
+                        _ => Err(TypeError),
+                    }
+                }
+            }
+        )*
+    };
+}
+impl_from!(Boolean -> bool, String -> PString<'gc>);
