@@ -1,5 +1,6 @@
 use std::fs::read_to_string;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use clap::{crate_authors, crate_description, crate_version, Arg, Command};
 use gc_arena::rootless_arena;
@@ -47,8 +48,8 @@ fn compile_and_run<S: AsRef<[u8]>>(file_name: Option<&str>, source: S) {
     }
 
     rootless_arena(|mc| {
-        let compile_result = compile(mc, |message| println!("{}", message), source);
-        let function = match compile_result {
+        let (r, ct) = timed(|| compile(mc, |m| println!("{}", m), source));
+        let function = match r {
             Ok(prototype) => {
                 println!("Prototype: {}", prototype);
                 prototype
@@ -59,13 +60,24 @@ fn compile_and_run<S: AsRef<[u8]>>(file_name: Option<&str>, source: S) {
             }
         };
 
-        match interpret(mc, function) {
+        let (r, it) = timed(|| interpret(mc, function));
+        match r {
             Ok(result) => {
+                println!("Compile time: {:?}", ct);
                 println!("Result: {:?}", result);
+                println!("Interpret time: {:?}", it);
             }
             Err(error) => {
                 println!("Error occurred while interpreting: {:?}", error);
             }
         }
     })
+}
+
+#[inline]
+fn timed<F: FnOnce() -> R, R>(f: F) -> (R, Duration) {
+    let start = Instant::now();
+    let result = f();
+    let duration = start.elapsed();
+    (result, duration)
 }
