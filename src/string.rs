@@ -316,10 +316,10 @@ impl<'gc> StringInterner<'gc> for PStringInterner<'gc> {
 
     fn intern(&mut self, mc: &Mutation<'gc>, string: &[u8]) -> Self::String {
         match self.strings.get(string) {
-            Some(string) => string.clone(),
+            Some(string) => *string,
             None => {
                 let string = PString::new(mc, string);
-                self.strings.insert(string.clone());
+                self.strings.insert(string);
                 string
             }
         }
