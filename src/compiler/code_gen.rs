@@ -245,12 +245,15 @@ impl State {
     }
 }
 
+// TODO: remove allows when needed
 struct CodeGen<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> {
+    #[allow(dead_code)]
     mc: &'ast Mutation<'gc>,
     nodes: &'ast [Node<'gc>],
     cursor: usize,
     bindings: &'ast HashMap<NodeRef, Binding<'gc>>,
 
+    #[allow(dead_code)]
     strings: I,
 
     state: SmallVec<[State; 32]>,
