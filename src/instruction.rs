@@ -193,7 +193,7 @@ impl Display for Instruction {
             }
             | Instruction::NegC { destination, right }
             | Instruction::NotC { destination, right } => {
-                write!(f, "{:4} {:4}     ", destination, right)
+                write!(f, "{:4} {:9}", destination, right)
             }
 
             Instruction::LoadI {
