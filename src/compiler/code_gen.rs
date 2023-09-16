@@ -541,7 +541,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
                         self.push_state(State::EnterExpr(ExprDest::Register(register)));
                     }
                     false => {
-                        let constant = self.push_constant(Value::Integer(0))?;
+                        let constant = self.push_constant(Value::Null)?;
                         self.push_instruction(Instruction::LoadC {
                             destination: register.into(),
                             constant: constant.into(),
