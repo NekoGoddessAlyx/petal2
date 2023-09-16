@@ -257,7 +257,6 @@ impl<'gc> State<'gc> {
 
 // TODO: remove allows when needed
 struct CodeGen<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> {
-    #[allow(dead_code)]
     mc: &'ast Mutation<'gc>,
     nodes: &'ast [Node<'gc>],
     cursor: usize,
@@ -342,6 +341,20 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
                     CIndex::Constant16(c) => RegisterOrConstant16::Constant16(c),
                 }
             }
+        })
+    }
+
+    fn try_inline_value<F: FnOnce(&'ast Mutation<'gc>) -> Option<Value<'gc>>>(
+        &mut self,
+        f: F,
+        dest: ExprDest,
+    ) -> Result<Option<AnyExpr<'gc>>> {
+        Ok(match f(self.mc) {
+            Some(value) => Some(match dest {
+                ExprDest::Register(_) => self.push_constant_to_register(value, dest)?.into(),
+                ExprDest::Anywhere => AnyExpr::Value(value),
+            }),
+            None => None,
         })
     }
 
@@ -769,35 +782,21 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         dest: ExprDest,
     ) -> Result<()> {
         if let AnyExpr::Value(right) = right {
-            match op {
-                UnOp::Neg => {
-                    if let Ok(value) = -right {
-                        let dest = match dest {
-                            ExprDest::Register(_) => {
-                                let dest = self.push_constant_to_register(value, dest)?;
-                                dest.into()
-                            }
-                            ExprDest::Anywhere => AnyExpr::Value(value),
-                        };
-                        self.push_state(State::ExitExpr(dest));
-                        return Ok(());
+            if let Some(dest) = self.try_inline_value(
+                |_| {
+                    match op {
+                        UnOp::Neg => -right,
+                        UnOp::Not => !right,
                     }
-                }
-                UnOp::Not => {
-                    if let Ok(value) = !right {
-                        let dest = match dest {
-                            ExprDest::Register(_) => {
-                                let dest = self.push_constant_to_register(value, dest)?;
-                                dest.into()
-                            }
-                            ExprDest::Anywhere => AnyExpr::Value(value),
-                        };
-                        self.push_state(State::ExitExpr(dest));
-                        return Ok(());
-                    }
-                }
+                    .ok()
+                },
+                dest,
+            )? {
+                self.push_state(State::ExitExpr(dest));
+                return Ok(());
             }
         };
+
         let right = self.flatten_any_expr(right)?;
         self.free_temp(right);
         let dest = self.allocate(dest)?;
@@ -831,61 +830,23 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         dest: ExprDest,
     ) -> Result<()> {
         if let (AnyExpr::Value(a), AnyExpr::Value(b)) = (left, right) {
-            match op {
-                BinOp::Add => {
-                    if let Ok(value) = a.add(self.mc, b) {
-                        let dest = match dest {
-                            ExprDest::Register(_) => {
-                                let dest = self.push_constant_to_register(value, dest)?;
-                                dest.into()
-                            }
-                            ExprDest::Anywhere => AnyExpr::Value(value),
-                        };
-                        self.push_state(State::ExitExpr(dest));
-                        return Ok(());
+            if let Some(dest) = self.try_inline_value(
+                |mc| {
+                    match op {
+                        BinOp::Add => a.add(mc, b),
+                        BinOp::Sub => a - b,
+                        BinOp::Mul => a * b,
+                        BinOp::Div => a / b,
                     }
-                }
-                BinOp::Sub => {
-                    if let Ok(value) = a - b {
-                        let dest = match dest {
-                            ExprDest::Register(_) => {
-                                let dest = self.push_constant_to_register(value, dest)?;
-                                dest.into()
-                            }
-                            ExprDest::Anywhere => AnyExpr::Value(value),
-                        };
-                        self.push_state(State::ExitExpr(dest));
-                        return Ok(());
-                    }
-                }
-                BinOp::Mul => {
-                    if let Ok(value) = a * b {
-                        let dest = match dest {
-                            ExprDest::Register(_) => {
-                                let dest = self.push_constant_to_register(value, dest)?;
-                                dest.into()
-                            }
-                            ExprDest::Anywhere => AnyExpr::Value(value),
-                        };
-                        self.push_state(State::ExitExpr(dest));
-                        return Ok(());
-                    }
-                }
-                BinOp::Div => {
-                    if let Ok(value) = a / b {
-                        let dest = match dest {
-                            ExprDest::Register(_) => {
-                                let dest = self.push_constant_to_register(value, dest)?;
-                                dest.into()
-                            }
-                            ExprDest::Anywhere => AnyExpr::Value(value),
-                        };
-                        self.push_state(State::ExitExpr(dest));
-                        return Ok(());
-                    }
-                }
+                    .ok()
+                },
+                dest,
+            )? {
+                self.push_state(State::ExitExpr(dest));
+                return Ok(());
             }
         }
+
         let left = self.flatten_constant(left, ExprDest::Anywhere)?;
         let right = self.flatten_constant(right, ExprDest::Anywhere)?;
         self.free_temp(left);
