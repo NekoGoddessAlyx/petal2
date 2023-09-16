@@ -1,5 +1,6 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::ops::{Neg, Not};
 use std::rc::Rc;
 
 use gc_arena::Mutation;
@@ -344,42 +345,37 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         })
     }
 
-    fn try_inline_value<F, const N: usize>(
+    fn try_inline_value<F, R, const N: usize>(
         &mut self,
         values: [AnyExpr<'gc>; N],
         f: F,
         dest: ExprDest,
     ) -> Result<Option<AnyExpr<'gc>>>
     where
-        F: FnOnce(&'ast Mutation<'gc>, [Value<'gc>; N]) -> Option<Value<'gc>>,
+        F: FnOnce(&'ast Mutation<'gc>, [Value<'gc>; N]) -> std::result::Result<Value<'gc>, R>,
     {
-        // TODO: is there a better way to initialize an array like this?
-        let mut new: [Value<'gc>; N] = [Value::Null; N];
+        let mut mapped: [Value<'gc>; N] = [Value::Null; N];
         for (i, v) in values.into_iter().enumerate() {
-            if let AnyExpr::Value(v) = v {
-                // SAFETY: const bound
-                unsafe {
-                    *new.get_unchecked_mut(i) = v;
-                }
-            } else {
-                return Ok(None);
+            match v {
+                AnyExpr::Value(v) => mapped[i] = v,
+                _ => return Ok(None),
             }
         }
-        Ok(match f(self.mc, new) {
-            Some(value) => Some(match dest {
+        Ok(match f(self.mc, mapped) {
+            Ok(value) => Some(match dest {
                 ExprDest::Register(_) => self.push_constant_to_register(value, dest)?.into(),
                 ExprDest::Anywhere => AnyExpr::Value(value),
             }),
-            None => None,
+            Err(_) => None,
         })
     }
 
     fn flatten_constant(
         &mut self,
-        value: impl Into<AnyExpr<'gc>>,
+        value: AnyExpr<'gc>,
         dest: ExprDest,
     ) -> Result<RegisterOrConstant8> {
-        Ok(match value.into() {
+        Ok(match value {
             AnyExpr::Protected(r) => RegisterOrConstant8::Protected(r),
             AnyExpr::Temporary(r) => RegisterOrConstant8::Temporary(r),
             AnyExpr::Constant8(c) => RegisterOrConstant8::Constant8(c),
@@ -813,12 +809,9 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     ) -> Result<()> {
         if let Some(dest) = self.try_inline_value(
             [right],
-            |_, [right]| {
-                match op {
-                    UnOp::Neg => -right,
-                    UnOp::Not => !right,
-                }
-                .ok()
+            |_, [right]| match op {
+                UnOp::Neg => right.neg(),
+                UnOp::Not => right.not(),
             },
             dest,
         )? {
@@ -860,14 +853,11 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     ) -> Result<()> {
         if let Some(dest) = self.try_inline_value(
             [left, right],
-            |mc, [a, b]| {
-                match op {
-                    BinOp::Add => a.add(mc, b),
-                    BinOp::Sub => a - b,
-                    BinOp::Mul => a * b,
-                    BinOp::Div => a / b,
-                }
-                .ok()
+            |mc, [a, b]| match op {
+                BinOp::Add => a.add(mc, b),
+                BinOp::Sub => a - b,
+                BinOp::Mul => a * b,
+                BinOp::Div => a / b,
             },
             dest,
         )? {
