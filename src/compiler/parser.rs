@@ -466,6 +466,14 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             Token::Val | Token::Var => {
                 self.push_state(State::BeginVariableDeclaration);
             }
+            Token::If => {
+                self.on_error(
+                    &"If statements are not yet implemented",
+                    Some(self.peek_location()),
+                );
+                self.advance();
+                self.push_state(State::EndStatement);
+            }
             Token::BraceOpen => {
                 self.push_state(State::BeginBlockStatement);
             }
@@ -864,8 +872,7 @@ impl<S> Token<S> {
 
     fn is_statement(&self) -> bool {
         match self {
-            Token::Val | Token::Var => true,
-            Token::BraceOpen => true,
+            Token::Val | Token::Var | Token::If | Token::BraceOpen => true,
             _ if self.is_expression() => true,
             _ => false,
         }
@@ -875,10 +882,10 @@ impl<S> Token<S> {
         // don't care
         #[allow(clippy::match_like_matches_macro)]
         match self {
-            Token::Return
-            | Token::Null
+            Token::Null
             | Token::True
             | Token::False
+            | Token::Return
             | Token::BraceOpen
             | Token::ParenOpen
             | Token::Bang

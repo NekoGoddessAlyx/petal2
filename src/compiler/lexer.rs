@@ -39,10 +39,12 @@ impl Display for LexerErr {
 pub enum Token<S> {
     Val,
     Var,
-    Return,
+    If,
+    Else,
     Null,
     True,
     False,
+    Return,
 
     BraceOpen,
     BraceClose,
@@ -494,8 +496,11 @@ where
             b"var" => {
                 self.push_token(Token::Var);
             }
-            b"return" => {
-                self.push_token(Token::Return);
+            b"if" => {
+                self.push_token(Token::If);
+            }
+            b"else" => {
+                self.push_token(Token::Else);
             }
             b"null" => {
                 self.push_token(Token::Null);
@@ -505,6 +510,9 @@ where
             }
             b"false" => {
                 self.push_token(Token::False);
+            }
+            b"return" => {
+                self.push_token(Token::Return);
             }
             _ => {
                 self.push_token(Token::Identifier(string));
