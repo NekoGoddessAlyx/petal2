@@ -750,8 +750,9 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
                 Ok(())
             }
             Expr::BinOp { op, len } => {
-                for _ in 0..len {
-                    self.push_state(State::ContinueBinaryExpr(op, dest));
+                self.push_state(State::ContinueBinaryExpr(op, dest));
+                for _ in 1..len {
+                    self.push_state(State::ContinueBinaryExpr(op, ExprDest::Anywhere));
                 }
                 self.push_state(State::EnterExprAnywhere);
 
