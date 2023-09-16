@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
 
@@ -8,6 +6,8 @@ use crate::compiler::ast::{Expr, RefLen};
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::{Span, Token};
 use crate::compiler::string::{CompileString, NewString};
+use crate::compiler::Diagnostic;
+use crate::MessageKind;
 
 #[derive(Debug, Error)]
 pub enum ParserError {
@@ -338,7 +338,7 @@ struct Parser<'tokens, C, NS, S> {
 }
 
 impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
-    fn on_error(&mut self, message: &dyn Display, source: Option<Span>) {
+    fn on_error(&mut self, message: &dyn Diagnostic, source: Option<Span>) {
         self.had_error = true;
         if !self.panic_mode {
             self.panic_mode = true;
@@ -356,7 +356,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         // Report error tokens, advance and continue
         while let Some(Token::Err(err)) = token {
             let source = self.locations.get(self.cursor).copied();
-            self.on_error(&err, source);
+            self.on_error(err, source);
             self.advance();
             token = self.tokens.get(self.cursor);
         }
@@ -474,8 +474,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     fn recover_statements(&mut self, accept_brace_close: bool) {
         if self.panic_mode {
-            // TODO: allow callback to accept plain diagnostic information without counting it as an error
-            println!("Recovering...");
+            (self.callback)(&("Recovering statements...", MessageKind::Info), None);
             self.panic_mode = false;
 
             loop {

@@ -6,6 +6,8 @@ use std::str::{from_utf8, FromStr};
 use smallvec::{smallvec, SmallVec};
 
 use crate::compiler::string::{CompileString, NewString};
+use crate::compiler::Diagnostic;
+use crate::MessageKind;
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum LexerErr {
@@ -32,6 +34,16 @@ impl Display for LexerErr {
                 write!(f, "Unterminated string")
             }
         }
+    }
+}
+
+impl Diagnostic for LexerErr {
+    fn kind(&self) -> MessageKind {
+        MessageKind::Error
+    }
+
+    fn message(&self) -> &dyn Display {
+        self
     }
 }
 

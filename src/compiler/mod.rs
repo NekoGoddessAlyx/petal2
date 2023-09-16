@@ -1,11 +1,12 @@
 use std::error::Error;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::str::from_utf8;
 
 use gc_arena::Mutation;
 use thiserror::Error;
 
 use crate::compiler::ast::Node;
+use crate::compiler::callback::Diagnostic;
 use crate::compiler::code_gen::{code_gen, CodeGenError};
 use crate::compiler::lexer::{lex, Source, Span};
 use crate::compiler::parser::{parse, ParserError};
@@ -24,21 +25,46 @@ mod sem_check;
 
 /// Some message generated during compilation.
 ///
-/// Right meow this is only for errors but in the future it could
-/// contain warnings or other diagnostic information.
-///
+/// The message may be an error or some other diagnostic information.
 /// May have information about where this message was generated from.
+///
+/// # Examples
+/// Simply logging all messages:
+/// ```rust
+/// # use petal2::{CompilerMessage, PString};
+/// fn callback(message: CompilerMessage<PString>) {
+///     // print the message with all available information
+///     // or write to some other logging mechanism
+///     print!("{}", message);
+/// }
+/// ```
+///
+/// Filtering messages to only errors:
+/// ```rust
+/// # use petal2::{CompilerMessage, MessageKind, PString};
+/// fn callback(message: CompilerMessage<PString>) {
+///     // ignores all messages that aren't errors
+///     if message.kind() == MessageKind::Error {
+///         print!("{}", message);
+///     }
+/// }
+/// ```
 pub struct CompilerMessage<'compiler, S> {
-    message: &'compiler dyn Display,
+    message: &'compiler dyn Diagnostic,
     source: &'compiler Source<'compiler, S>,
     at: Option<Span>,
 }
 
 impl<S> CompilerMessage<'_, S> {
-    pub fn message(&self) -> &dyn Display {
-        self.message
+    pub fn kind(&self) -> MessageKind {
+        self.message.kind()
     }
 
+    pub fn message(&self) -> &dyn Display {
+        self.message.message()
+    }
+
+    /// A line number if this message was generated from some point in the source code
     pub fn line_number(&self) -> Option<u32> {
         self.at
             .map(|at| (*self.source.get_line_numbers(at).start()).into())
@@ -47,7 +73,11 @@ impl<S> CompilerMessage<'_, S> {
 
 impl<S> Display for CompilerMessage<'_, S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Error: {}", self.message)?;
+        match self.kind() {
+            MessageKind::Info => write!(f, "Info: "),
+            MessageKind::Error => write!(f, "Error: "),
+        }?;
+        write!(f, "{}", self.message())?;
 
         let source = self.source;
         if let Some(at) = self.at {
@@ -103,6 +133,12 @@ impl<S> Display for CompilerMessage<'_, S> {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum MessageKind {
+    Info,
+    Error,
+}
+
 // compile
 
 #[derive(Debug, Error)]
@@ -149,8 +185,11 @@ where
     println!("Locations: {:?}", source.locations);
     println!("Line Starts: {:?}", source.line_starts);
 
-    let mut callback = |message: &dyn Display, at: Option<Span>| {
-        num_errors += 1;
+    let mut callback = |message: &dyn Diagnostic, at: Option<Span>| {
+        match message.kind() {
+            MessageKind::Info => {}
+            MessageKind::Error => num_errors += 1,
+        }
         callback(CompilerMessage {
             message,
             source: &source,
@@ -205,7 +244,7 @@ where
             | CodeGenError::MissingBinding
             | CodeGenError::MissingLocalRegister => Err(CompileError::CompilerError(error.into())),
             CodeGenError::NoRegistersAvailable | CodeGenError::ConstantPoolFull => {
-                callback(&error, None);
+                callback(&(error, MessageKind::Error), None);
                 Err(CompileError::CompileFailed(num_errors))
             }
         },
@@ -231,7 +270,33 @@ mod callback {
     use std::fmt::Display;
 
     use crate::compiler::lexer::Span;
+    use crate::MessageKind;
 
-    pub trait Callback: FnMut(&dyn Display, Option<Span>) {}
-    impl<T: FnMut(&dyn Display, Option<Span>)> Callback for T {}
+    pub trait Diagnostic {
+        fn kind(&self) -> MessageKind;
+        fn message(&self) -> &dyn Display;
+    }
+
+    impl<T: Display> Diagnostic for (T, MessageKind) {
+        fn kind(&self) -> MessageKind {
+            self.1
+        }
+
+        fn message(&self) -> &dyn Display {
+            &self.0
+        }
+    }
+
+    impl Diagnostic for &'static str {
+        fn kind(&self) -> MessageKind {
+            MessageKind::Error
+        }
+
+        fn message(&self) -> &dyn Display {
+            self
+        }
+    }
+
+    pub trait Callback: FnMut(&dyn Diagnostic, Option<Span>) {}
+    impl<T: FnMut(&dyn Diagnostic, Option<Span>)> Callback for T {}
 }

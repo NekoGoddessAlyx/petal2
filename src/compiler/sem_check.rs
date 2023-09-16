@@ -11,6 +11,8 @@ use crate::compiler::ast::{Ast, Expr, Mutability, Node, NodeRef, RefLen, Root, S
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::Span;
 use crate::compiler::string::CompileString;
+use crate::compiler::Diagnostic;
+use crate::MessageKind;
 
 #[derive(Debug)]
 pub enum SemCheckMsg<S> {
@@ -34,6 +36,16 @@ impl<S: CompileString> Display for SemCheckMsg<S> {
                 write!(f, "Variable '{}' not found", name)
             }
         }
+    }
+}
+
+impl<S: CompileString> Diagnostic for SemCheckMsg<S> {
+    fn kind(&self) -> MessageKind {
+        MessageKind::Error
+    }
+
+    fn message(&self) -> &dyn Display {
+        self
     }
 }
 
@@ -140,7 +152,7 @@ struct SemCheck<'ast, C, S> {
 }
 
 impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
-    fn on_error(&mut self, message: &dyn Display, source: Option<Span>) {
+    fn on_error(&mut self, message: &dyn Diagnostic, source: Option<Span>) {
         self.had_error = true;
         (self.callback)(message, source);
     }
