@@ -98,7 +98,7 @@ impl<'gc> PrototypeBuilder<'gc> {
 }
 
 #[derive(Debug)]
-enum State {
+enum State<'gc> {
     // root
     EnterRoot,
 
@@ -114,21 +114,21 @@ enum State {
     // expressions
     EnterExprAnywhere,
     EnterExpr(ExprDest),
-    ExitExpr(RegisterOrConstant16),
+    ExitExpr(AnyExpr<'gc>),
 
     ExitVariableExpr(Register, ExprDest),
     ExitReturnExpr(ExprDest),
     ExitUnaryExpr(UnOp, ExprDest),
     ContinueBinaryExpr(BinOp, ExprDest),
-    ExitBinaryExpr(BinOp, RegisterOrConstant16, ExprDest),
+    ExitBinaryExpr(BinOp, AnyExpr<'gc>, ExprDest),
     ContinueBlockExpr(RefLen),
     ExitBlockExpr(u16, ExprDest),
 }
 
-impl State {
-    fn enter<'gc, I: StringInterner<'gc, String = PString<'gc>>>(
+impl<'gc> State<'gc> {
+    fn enter<I: StringInterner<'gc, String = PString<'gc>>>(
         &mut self,
-        from: Option<State>,
+        from: Option<State<'gc>>,
         code_gen: &mut CodeGen<'gc, '_, I>,
     ) -> Result<()> {
         macro_rules! fail_transfer {
@@ -266,7 +266,7 @@ struct CodeGen<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> {
     #[allow(dead_code)]
     strings: I,
 
-    state: SmallVec<[State; 32]>,
+    state: SmallVec<[State<'gc>; 32]>,
 
     current_function: PrototypeBuilder<'gc>,
 }
@@ -303,11 +303,11 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         NodeRef::new(self.cursor.saturating_sub(1))
     }
 
-    fn push_state(&mut self, state: State) {
+    fn push_state(&mut self, state: State<'gc>) {
         self.state.push(state);
     }
 
-    fn pop_state(&mut self) -> Option<State> {
+    fn pop_state(&mut self) -> Option<State<'gc>> {
         self.state.pop()
     }
 
@@ -329,22 +329,52 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         }
     }
 
+    fn flatten_any_expr(&mut self, value: AnyExpr<'gc>) -> Result<RegisterOrConstant16> {
+        Ok(match value {
+            AnyExpr::Protected(r) => RegisterOrConstant16::Protected(r),
+            AnyExpr::Temporary(r) => RegisterOrConstant16::Temporary(r),
+            AnyExpr::Constant8(c) => RegisterOrConstant16::Constant8(c),
+            AnyExpr::Constant16(c) => RegisterOrConstant16::Constant16(c),
+            AnyExpr::Value(v) => {
+                let constant = self.push_constant(v)?;
+                match constant {
+                    CIndex::Constant8(c) => RegisterOrConstant16::Constant8(c),
+                    CIndex::Constant16(c) => RegisterOrConstant16::Constant16(c),
+                }
+            }
+        })
+    }
+
     fn flatten_constant(
         &mut self,
-        value: RegisterOrConstant16,
+        value: impl Into<AnyExpr<'gc>>,
         dest: ExprDest,
     ) -> Result<RegisterOrConstant8> {
-        Ok(match value {
-            RegisterOrConstant16::Protected(r) => RegisterOrConstant8::Protected(r),
-            RegisterOrConstant16::Temporary(r) => RegisterOrConstant8::Temporary(r),
-            RegisterOrConstant16::Constant8(c) => RegisterOrConstant8::Constant8(c),
-            RegisterOrConstant16::Constant16(c) => {
+        Ok(match value.into() {
+            AnyExpr::Protected(r) => RegisterOrConstant8::Protected(r),
+            AnyExpr::Temporary(r) => RegisterOrConstant8::Temporary(r),
+            AnyExpr::Constant8(c) => RegisterOrConstant8::Constant8(c),
+            AnyExpr::Constant16(c) => {
                 let register = self.allocate(dest)?;
                 self.push_instruction(Instruction::LoadC {
                     destination: register.into(),
                     constant: c,
                 });
                 register.into()
+            }
+            AnyExpr::Value(v) => {
+                let constant = self.push_constant(v)?;
+                match constant {
+                    CIndex::Constant8(c) => RegisterOrConstant8::Constant8(c),
+                    CIndex::Constant16(c) => {
+                        let register = self.allocate(dest)?;
+                        self.push_instruction(Instruction::LoadC {
+                            destination: register.into(),
+                            constant: c,
+                        });
+                        register.into()
+                    }
+                }
             }
         })
     }
@@ -487,7 +517,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
                             destination: register.into(),
                             constant: constant.into(),
                         });
-                        self.exit_variable_declaration(RegisterOrConstant16::Protected(register))?;
+                        self.exit_variable_declaration(AnyExpr::Protected(register))?;
                     }
                 }
 
@@ -517,16 +547,16 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         Ok(())
     }
 
-    fn exit_variable_declaration(&mut self, register: RegisterOrConstant16) -> Result<()> {
+    fn exit_variable_declaration(&mut self, register: AnyExpr<'gc>) -> Result<()> {
         assert!(
-            matches!(register, RegisterOrConstant16::Protected(_)),
+            matches!(register, AnyExpr::Protected(_)),
             "Register must be protected"
         );
         self.push_state(State::ExitStat);
         Ok(())
     }
 
-    fn exit_expression_statement(&mut self, register: RegisterOrConstant16) -> Result<()> {
+    fn exit_expression_statement(&mut self, register: AnyExpr<'gc>) -> Result<()> {
         self.free_temp(register);
         self.push_state(State::ExitStat);
         Ok(())
@@ -543,32 +573,27 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     fn consume_expr_anywhere(&mut self, node: NodeRef, expr: &'ast Expr<'gc>) -> Result<()> {
         match *expr {
             Expr::Null => {
-                let constant = self.push_constant(Value::Null)?;
-                self.push_state(State::ExitExpr(constant.into()));
+                self.push_state(State::ExitExpr(Value::Null.into()));
 
                 Ok(())
             }
             Expr::Bool(v) => {
-                let constant = self.push_constant(Value::Boolean(v))?;
-                self.push_state(State::ExitExpr(constant.into()));
+                self.push_state(State::ExitExpr(Value::Boolean(v).into()));
 
                 Ok(())
             }
             Expr::Integer(v) => {
-                let constant = self.push_constant(Value::Integer(v))?;
-                self.push_state(State::ExitExpr(constant.into()));
+                self.push_state(State::ExitExpr(Value::Integer(v).into()));
 
                 Ok(())
             }
             Expr::Float(v) => {
-                let constant = self.push_constant(Value::Float(v))?;
-                self.push_state(State::ExitExpr(constant.into()));
+                self.push_state(State::ExitExpr(Value::Float(v).into()));
 
                 Ok(())
             }
             Expr::String(v) => {
-                let constant = self.push_constant(Value::String(v))?;
-                self.push_state(State::ExitExpr(constant.into()));
+                self.push_state(State::ExitExpr(Value::String(v).into()));
 
                 Ok(())
             }
@@ -588,7 +613,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
                         self.push_state(State::EnterExpr(ExprDest::Register(local)));
                     }
                     false => {
-                        self.push_state(State::ExitExpr(RegisterOrConstant16::Protected(local)));
+                        self.push_state(State::ExitExpr(AnyExpr::Protected(local)));
                     }
                 }
 
@@ -727,11 +752,8 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         Ok(())
     }
 
-    fn exit_return_expression(
-        &mut self,
-        right: RegisterOrConstant16,
-        dest: ExprDest,
-    ) -> Result<()> {
+    fn exit_return_expression(&mut self, right: AnyExpr<'gc>, dest: ExprDest) -> Result<()> {
+        let right = self.flatten_any_expr(right)?;
         self.free_temp(right);
         self.push_instruction(Instruction::ret(right));
         let dest = self.allocate(dest)?;
@@ -743,9 +765,40 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     fn exit_unary_expression(
         &mut self,
         op: UnOp,
-        right: RegisterOrConstant16,
+        right: AnyExpr<'gc>,
         dest: ExprDest,
     ) -> Result<()> {
+        if let AnyExpr::Value(right) = right {
+            match op {
+                UnOp::Neg => {
+                    if let Ok(value) = -right {
+                        let dest = match dest {
+                            ExprDest::Register(_) => {
+                                let dest = self.push_constant_to_register(value, dest)?;
+                                dest.into()
+                            }
+                            ExprDest::Anywhere => AnyExpr::Value(value),
+                        };
+                        self.push_state(State::ExitExpr(dest));
+                        return Ok(());
+                    }
+                }
+                UnOp::Not => {
+                    if let Ok(value) = !right {
+                        let dest = match dest {
+                            ExprDest::Register(_) => {
+                                let dest = self.push_constant_to_register(value, dest)?;
+                                dest.into()
+                            }
+                            ExprDest::Anywhere => AnyExpr::Value(value),
+                        };
+                        self.push_state(State::ExitExpr(dest));
+                        return Ok(());
+                    }
+                }
+            }
+        };
+        let right = self.flatten_any_expr(right)?;
         self.free_temp(right);
         let dest = self.allocate(dest)?;
         let instruction = match op {
@@ -761,7 +814,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     fn continue_binary_expression(
         &mut self,
         op: BinOp,
-        left: RegisterOrConstant16,
+        left: AnyExpr<'gc>,
         dest: ExprDest,
     ) -> Result<()> {
         self.push_state(State::ExitBinaryExpr(op, left, dest));
@@ -773,10 +826,66 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     fn exit_binary_expression(
         &mut self,
         op: BinOp,
-        left: RegisterOrConstant16,
-        right: RegisterOrConstant16,
+        left: AnyExpr<'gc>,
+        right: AnyExpr<'gc>,
         dest: ExprDest,
     ) -> Result<()> {
+        if let (AnyExpr::Value(a), AnyExpr::Value(b)) = (left, right) {
+            match op {
+                BinOp::Add => {
+                    if let Ok(value) = a.add(self.mc, b) {
+                        let dest = match dest {
+                            ExprDest::Register(_) => {
+                                let dest = self.push_constant_to_register(value, dest)?;
+                                dest.into()
+                            }
+                            ExprDest::Anywhere => AnyExpr::Value(value),
+                        };
+                        self.push_state(State::ExitExpr(dest));
+                        return Ok(());
+                    }
+                }
+                BinOp::Sub => {
+                    if let Ok(value) = a - b {
+                        let dest = match dest {
+                            ExprDest::Register(_) => {
+                                let dest = self.push_constant_to_register(value, dest)?;
+                                dest.into()
+                            }
+                            ExprDest::Anywhere => AnyExpr::Value(value),
+                        };
+                        self.push_state(State::ExitExpr(dest));
+                        return Ok(());
+                    }
+                }
+                BinOp::Mul => {
+                    if let Ok(value) = a * b {
+                        let dest = match dest {
+                            ExprDest::Register(_) => {
+                                let dest = self.push_constant_to_register(value, dest)?;
+                                dest.into()
+                            }
+                            ExprDest::Anywhere => AnyExpr::Value(value),
+                        };
+                        self.push_state(State::ExitExpr(dest));
+                        return Ok(());
+                    }
+                }
+                BinOp::Div => {
+                    if let Ok(value) = a / b {
+                        let dest = match dest {
+                            ExprDest::Register(_) => {
+                                let dest = self.push_constant_to_register(value, dest)?;
+                                dest.into()
+                            }
+                            ExprDest::Anywhere => AnyExpr::Value(value),
+                        };
+                        self.push_state(State::ExitExpr(dest));
+                        return Ok(());
+                    }
+                }
+            }
+        }
         let left = self.flatten_constant(left, ExprDest::Anywhere)?;
         let right = self.flatten_constant(right, ExprDest::Anywhere)?;
         self.free_temp(left);
@@ -806,9 +915,10 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     fn exit_block_expr(
         &mut self,
         stack_top: u16,
-        expr: RegisterOrConstant16,
+        expr: AnyExpr<'gc>,
         dest: ExprDest,
     ) -> Result<()> {
+        let expr = self.flatten_any_expr(expr)?;
         self.current_function.registers.pop_to(stack_top);
 
         let dest = self.allocate(dest)?;
@@ -835,6 +945,41 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
 
 trait IntoTempRegister {
     fn into_temp_register(self) -> Option<Register>;
+}
+
+#[derive(Copy, Clone, Debug)]
+enum AnyExpr<'gc> {
+    Protected(Register),
+    Temporary(Register),
+    Constant8(CIndex8),
+    Constant16(CIndex16),
+    Value(Value<'gc>),
+}
+
+impl IntoTempRegister for AnyExpr<'_> {
+    fn into_temp_register(self) -> Option<Register> {
+        match self {
+            AnyExpr::Temporary(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
+impl From<RegisterOrConstant16> for AnyExpr<'_> {
+    fn from(value: RegisterOrConstant16) -> Self {
+        match value {
+            RegisterOrConstant16::Protected(r) => AnyExpr::Protected(r),
+            RegisterOrConstant16::Temporary(r) => AnyExpr::Temporary(r),
+            RegisterOrConstant16::Constant8(c) => AnyExpr::Constant8(c),
+            RegisterOrConstant16::Constant16(c) => AnyExpr::Constant16(c),
+        }
+    }
+}
+
+impl<'gc> From<Value<'gc>> for AnyExpr<'gc> {
+    fn from(value: Value<'gc>) -> Self {
+        Self::Value(value)
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -883,6 +1028,15 @@ impl IntoTempRegister for MaybeTempRegister {
         match self {
             MaybeTempRegister::Temporary(r) => Some(r),
             _ => None,
+        }
+    }
+}
+
+impl From<MaybeTempRegister> for AnyExpr<'_> {
+    fn from(value: MaybeTempRegister) -> Self {
+        match value {
+            MaybeTempRegister::Protected(r) => AnyExpr::Protected(r),
+            MaybeTempRegister::Temporary(r) => AnyExpr::Temporary(r),
         }
     }
 }
