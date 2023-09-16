@@ -255,13 +255,13 @@ impl<'gc> State<'gc> {
     }
 }
 
-// TODO: remove allows when needed
 struct CodeGen<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> {
     mc: &'ast Mutation<'gc>,
     nodes: &'ast [Node<'gc>],
     cursor: usize,
     bindings: &'ast HashMap<NodeRef, Binding<'gc>>,
 
+    // TODO: remove allow when needed
     #[allow(dead_code)]
     strings: I,
 
