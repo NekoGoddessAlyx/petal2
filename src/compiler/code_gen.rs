@@ -344,12 +344,28 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         })
     }
 
-    fn try_inline_value<F: FnOnce(&'ast Mutation<'gc>) -> Option<Value<'gc>>>(
+    fn try_inline_value<F, const N: usize>(
         &mut self,
+        values: [AnyExpr<'gc>; N],
         f: F,
         dest: ExprDest,
-    ) -> Result<Option<AnyExpr<'gc>>> {
-        Ok(match f(self.mc) {
+    ) -> Result<Option<AnyExpr<'gc>>>
+    where
+        F: FnOnce(&'ast Mutation<'gc>, [Value<'gc>; N]) -> Option<Value<'gc>>,
+    {
+        // TODO: is there a better way to initialize an array like this?
+        let mut new: [Value<'gc>; N] = [Value::Null; N];
+        for (i, v) in values.into_iter().enumerate() {
+            if let AnyExpr::Value(v) = v {
+                // SAFETY: const bound
+                unsafe {
+                    *new.get_unchecked_mut(i) = v;
+                }
+            } else {
+                return Ok(None);
+            }
+        }
+        Ok(match f(self.mc, new) {
             Some(value) => Some(match dest {
                 ExprDest::Register(_) => self.push_constant_to_register(value, dest)?.into(),
                 ExprDest::Anywhere => AnyExpr::Value(value),
@@ -781,21 +797,20 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         right: AnyExpr<'gc>,
         dest: ExprDest,
     ) -> Result<()> {
-        if let AnyExpr::Value(right) = right {
-            if let Some(dest) = self.try_inline_value(
-                |_| {
-                    match op {
-                        UnOp::Neg => -right,
-                        UnOp::Not => !right,
-                    }
-                    .ok()
-                },
-                dest,
-            )? {
-                self.push_state(State::ExitExpr(dest));
-                return Ok(());
-            }
-        };
+        if let Some(dest) = self.try_inline_value(
+            [right],
+            |_, [right]| {
+                match op {
+                    UnOp::Neg => -right,
+                    UnOp::Not => !right,
+                }
+                .ok()
+            },
+            dest,
+        )? {
+            self.push_state(State::ExitExpr(dest));
+            return Ok(());
+        }
 
         let right = self.flatten_any_expr(right)?;
         self.free_temp(right);
@@ -829,22 +844,21 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         right: AnyExpr<'gc>,
         dest: ExprDest,
     ) -> Result<()> {
-        if let (AnyExpr::Value(a), AnyExpr::Value(b)) = (left, right) {
-            if let Some(dest) = self.try_inline_value(
-                |mc| {
-                    match op {
-                        BinOp::Add => a.add(mc, b),
-                        BinOp::Sub => a - b,
-                        BinOp::Mul => a * b,
-                        BinOp::Div => a / b,
-                    }
-                    .ok()
-                },
-                dest,
-            )? {
-                self.push_state(State::ExitExpr(dest));
-                return Ok(());
-            }
+        if let Some(dest) = self.try_inline_value(
+            [left, right],
+            |mc, [a, b]| {
+                match op {
+                    BinOp::Add => a.add(mc, b),
+                    BinOp::Sub => a - b,
+                    BinOp::Mul => a * b,
+                    BinOp::Div => a / b,
+                }
+                .ok()
+            },
+            dest,
+        )? {
+            self.push_state(State::ExitExpr(dest));
+            return Ok(());
         }
 
         let left = self.flatten_constant(left, ExprDest::Anywhere)?;
