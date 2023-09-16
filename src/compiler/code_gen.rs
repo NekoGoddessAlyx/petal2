@@ -542,6 +542,18 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
 
     fn consume_expr_anywhere(&mut self, node: NodeRef, expr: &'ast Expr<'gc>) -> Result<()> {
         match *expr {
+            Expr::Null => {
+                let constant = self.push_constant(Value::Null)?;
+                self.push_state(State::ExitExpr(constant.into()));
+
+                Ok(())
+            }
+            Expr::Bool(v) => {
+                let constant = self.push_constant(Value::Boolean(v))?;
+                self.push_state(State::ExitExpr(constant.into()));
+
+                Ok(())
+            }
             Expr::Integer(v) => {
                 let constant = self.push_constant(Value::Integer(v))?;
                 self.push_state(State::ExitExpr(constant.into()));
@@ -550,6 +562,12 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
             }
             Expr::Float(v) => {
                 let constant = self.push_constant(Value::Float(v))?;
+                self.push_state(State::ExitExpr(constant.into()));
+
+                Ok(())
+            }
+            Expr::String(v) => {
+                let constant = self.push_constant(Value::String(v))?;
                 self.push_state(State::ExitExpr(constant.into()));
 
                 Ok(())
