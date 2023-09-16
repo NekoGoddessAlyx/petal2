@@ -82,6 +82,10 @@ impl Display for Prototype<'_> {
                         | Instruction::SubCR { left, .. }
                         | Instruction::MulCR { left, .. }
                         | Instruction::DivCR { left, .. } => fmt_c(f, constants, left),
+                        // TODO: display jump
+                        Instruction::CJumpR { .. } => Ok(()),
+                        Instruction::CJumpC { constant, .. } => fmt_c(f, constants, constant),
+                        Instruction::Jump { .. } => Ok(()),
                     }?;
 
                     writeln!(f)?;

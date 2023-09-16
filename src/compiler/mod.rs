@@ -235,6 +235,7 @@ where
 
     match code_gen(mc, ast, strings) {
         Ok(prototype) => Ok(prototype),
+        // TODO: split codegen error into two parts: an internal error and compiler message
         Err(error) => match error {
             CodeGenError::ExpectedNode
             | CodeGenError::ExpectedRoot
@@ -242,7 +243,10 @@ where
             | CodeGenError::ExpectedExpr
             | CodeGenError::BadTransition
             | CodeGenError::MissingBinding
-            | CodeGenError::MissingLocalRegister => Err(CompileError::CompilerError(error.into())),
+            | CodeGenError::MissingLocalRegister
+            | CodeGenError::InvalidJumpLabel
+            | CodeGenError::NegativeConditionalJump
+            | CodeGenError::JumpTooLarge => Err(CompileError::CompilerError(error.into())),
             CodeGenError::NoRegistersAvailable | CodeGenError::ConstantPoolFull => {
                 callback(&(error, MessageKind::Error), None);
                 Err(CompileError::CompileFailed(num_errors))

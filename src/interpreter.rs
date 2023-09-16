@@ -9,6 +9,8 @@ use crate::value::{TypeError, Value};
 pub enum InterpretResult {
     #[error(transparent)]
     TypeError(#[from] TypeError),
+    #[error("Bad jump")]
+    JumpError,
 }
 
 pub fn interpret<'gc>(
@@ -47,6 +49,13 @@ pub fn interpret<'gc>(
             *constants.get_unchecked($c as usize)
         };
     }
+    macro_rules! jump {
+        ($j: expr) => {
+            pc = pc
+                .checked_add_signed($j as isize)
+                .ok_or(InterpretResult::JumpError)?
+        };
+    }
 
     // SAFETY:
     // aside from jumps (which are not yet implemented),
@@ -55,6 +64,9 @@ pub fn interpret<'gc>(
     // (thus execution cannot continue past the end of the instructions)
     //
     // as for constants: 😐 trust the compiler that things won't burn down
+    //
+    // jumps add another avenue for burning things down
+    // ohhhhh welllllll 😸
     unsafe {
         loop {
             let instruction = *instructions.get_unchecked(pc);
@@ -168,6 +180,18 @@ pub fn interpret<'gc>(
                     left,
                     right,
                 } => mov!(destination, (constant!(left) / constant!(right))?),
+
+                Instruction::CJumpR { register, jump } => {
+                    if !peek!(register).to_bool() {
+                        jump!(jump)
+                    }
+                }
+                Instruction::CJumpC { constant, jump } => {
+                    if !constant!(constant).to_bool() {
+                        jump!(jump)
+                    }
+                }
+                Instruction::Jump { jump } => jump!(jump),
             };
         }
     }

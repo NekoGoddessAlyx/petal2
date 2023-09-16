@@ -36,6 +36,12 @@ pub enum CodeGenError {
     MissingBinding,
     #[error("Local does not have a register assigned")]
     MissingLocalRegister,
+    #[error("Invalid jump label")]
+    InvalidJumpLabel,
+    #[error("Negative conditional jump")]
+    NegativeConditionalJump,
+    #[error("Jump is too large")]
+    JumpTooLarge,
     #[error("No registers are available. Your function is too large.")]
     NoRegistersAvailable,
     #[error("Constant pool is full. Your function is too large.")]
@@ -110,6 +116,10 @@ enum State<'gc> {
     ContinueCompoundStat(RefLen),
     ExitCompoundStat(u16),
     ExitVarDecl,
+    ExitIfStatCondition(bool),
+    ExitIfStatBody(Label, bool),
+    ExitIfStatElseBody(Label),
+    ExitIfStat,
     ExitExprStat,
 
     // expressions
@@ -152,6 +162,8 @@ impl<'gc> State<'gc> {
                 | Some(State::ExitStat)
                 | Some(State::EnterStat)
                 | Some(State::ContinueCompoundStat(..))
+                | Some(State::ExitIfStatCondition(..))
+                | Some(State::ExitIfStatBody(..))
                 | Some(State::ContinueBlockExpr(..)) => code_gen.enter_statement(),
                 _ => fail_transfer!(),
             },
@@ -160,6 +172,7 @@ impl<'gc> State<'gc> {
                 | Some(State::ExitStat)
                 | Some(State::ExitCompoundStat(..))
                 | Some(State::ExitVarDecl)
+                | Some(State::ExitIfStat)
                 | Some(State::ExitExprStat) => Ok(()),
                 _ => fail_transfer!(),
             },
@@ -180,6 +193,26 @@ impl<'gc> State<'gc> {
             },
             State::ExitVarDecl => match from {
                 Some(State::ExitExpr(register)) => code_gen.exit_variable_declaration(register),
+                _ => fail_transfer!(),
+            },
+            State::ExitIfStatCondition(has_else) => match from {
+                Some(State::ExitExpr(condition)) => {
+                    code_gen.exit_if_stat_condition(*has_else, condition)
+                }
+                _ => fail_transfer!(),
+            },
+            State::ExitIfStatBody(if_label, has_else) => match from {
+                Some(State::ExitStat) => code_gen.exit_if_stat_body(*if_label, *has_else),
+                _ => fail_transfer!(),
+            },
+            State::ExitIfStatElseBody(else_label) => match from {
+                Some(State::ExitStat) => code_gen.exit_if_stat_else_body(*else_label),
+                _ => fail_transfer!(),
+            },
+            State::ExitIfStat => match from {
+                Some(State::ExitIfStatBody(..)) | Some(State::ExitIfStatElseBody(..)) => {
+                    code_gen.exit_if_stat()
+                }
                 _ => fail_transfer!(),
             },
             State::ExitExprStat => match from {
@@ -457,8 +490,47 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         Ok(dest)
     }
 
-    fn push_instruction(&mut self, instruction: Instruction) {
+    fn push_instruction(&mut self, instruction: Instruction) -> Label {
+        let label = self.current_function.instructions.len();
         self.current_function.instructions.push(instruction);
+        label as Label
+    }
+
+    fn patch_jump(&mut self, jump: Label, dest: Label) -> Result<()> {
+        let Some(instr) = self.current_function.instructions.get_mut(jump as usize) else {
+            return Err(CodeGenError::InvalidJumpLabel);
+        };
+
+        match instr {
+            Instruction::CJumpR { jump: jmp, .. } | Instruction::CJumpC { jump: jmp, .. } => {
+                const MAX_JUMP: i64 = u16::MAX as i64;
+                match (dest as i64).checked_sub(jump as i64 + 1) {
+                    Some(jump @ 0..=MAX_JUMP) => {
+                        *jmp = jump as u16;
+                        Ok(())
+                    }
+                    Some(jump) if jump < 0 => Err(CodeGenError::NegativeConditionalJump),
+                    _ => Err(CodeGenError::JumpTooLarge),
+                }
+            }
+            Instruction::Jump { jump: jmp } => {
+                const MIN_JUMP: i64 = i16::MIN as i64;
+                const MAX_JUMP: i64 = i16::MAX as i64;
+                match (dest as i64).checked_sub(jump as i64 + 1) {
+                    Some(jump @ MIN_JUMP..=MAX_JUMP) => {
+                        *jmp = jump as i16;
+                        Ok(())
+                    }
+                    _ => Err(CodeGenError::JumpTooLarge),
+                }
+            }
+            _ => Err(CodeGenError::InvalidJumpLabel),
+        }
+    }
+
+    /// Returns a label to the next instruction (does not yet exist!)
+    fn next_instruction(&self) -> Label {
+        self.current_function.instructions.len() as Label
     }
 
     fn push_constant(&mut self, constant: Value<'gc>) -> Result<CIndex> {
@@ -521,11 +593,11 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     fn enter_statement(&mut self) -> Result<()> {
         let statement = self.next_stat()?;
         let node = self.last_node_as_ref();
-        match statement {
+        match *statement {
             Stat::Compound { len, .. } => {
                 let stack_top = self.current_function.registers.stack_top();
                 self.push_state(State::ExitCompoundStat(stack_top));
-                self.push_state(State::ContinueCompoundStat(*len));
+                self.push_state(State::ContinueCompoundStat(len));
 
                 Ok(())
             }
@@ -561,7 +633,12 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
 
                 Ok(())
             }
-            Stat::If { .. } => todo!("if statements not yet ready"),
+            Stat::If { has_else } => {
+                self.push_state(State::ExitIfStatCondition(has_else));
+                self.push_state(State::EnterExprAnywhere);
+
+                Ok(())
+            }
             Stat::Expr => {
                 self.push_state(State::ExitExprStat);
                 self.push_state(State::EnterExprAnywhere);
@@ -592,6 +669,47 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
             "Register must be protected"
         );
         self.push_state(State::ExitStat);
+        Ok(())
+    }
+
+    fn exit_if_stat_condition(&mut self, has_else: bool, condition: AnyExpr<'gc>) -> Result<()> {
+        // TODO: optimize based on condition
+        let dest = self.flatten_constant(condition, ExprDest::Anywhere)?;
+        self.free_temp(dest);
+
+        let if_label = self.push_instruction(Instruction::cond_jump(dest, 0));
+        self.push_state(State::ExitIfStatBody(if_label, has_else));
+        self.push_state(State::EnterStat);
+        Ok(())
+    }
+
+    fn exit_if_stat_body(&mut self, if_label: Label, has_else: bool) -> Result<()> {
+        match has_else {
+            true => {
+                let else_label = self.push_instruction(Instruction::Jump { jump: 0 });
+                self.patch_jump(if_label, else_label + 1)?;
+                self.push_state(State::ExitIfStatElseBody(else_label));
+                self.push_state(State::EnterStat);
+            }
+            false => {
+                self.patch_jump(if_label, self.next_instruction())?;
+                self.push_state(State::ExitIfStat);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn exit_if_stat_else_body(&mut self, else_label: Label) -> Result<()> {
+        self.patch_jump(else_label, self.next_instruction())?;
+        self.push_state(State::ExitIfStat);
+
+        Ok(())
+    }
+
+    fn exit_if_stat(&mut self) -> Result<()> {
+        self.push_state(State::ExitStat);
+
         Ok(())
     }
 
@@ -1299,4 +1417,21 @@ impl Instruction {
             }
         }
     }
+
+    fn cond_jump(condition: RegisterOrConstant8, jump: u16) -> Instruction {
+        match condition {
+            RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r) => {
+                Instruction::CJumpR {
+                    register: r.into(),
+                    jump,
+                }
+            }
+            RegisterOrConstant8::Constant8(c) => Instruction::CJumpC {
+                constant: c.into(),
+                jump,
+            },
+        }
+    }
 }
+
+type Label = u32;

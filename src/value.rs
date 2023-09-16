@@ -17,6 +17,13 @@ pub enum Value<'gc> {
 }
 
 impl<'gc> Value<'gc> {
+    pub fn to_bool(self) -> bool {
+        match self {
+            Value::Null | Value::Boolean(false) => false,
+            Value::Boolean(true) | Value::Integer(_) | Value::Float(_) | Value::String(_) => true,
+        }
+    }
+
     pub fn add(self, mc: &Mutation<'gc>, right: Self) -> Result<Self, TypeError> {
         Ok(match (self, right) {
             (Value::Integer(a), Value::Integer(b)) => Value::Integer(a.wrapping_add(b)),

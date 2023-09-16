@@ -137,6 +137,19 @@ pub enum Instruction {
         left: CIndex8,
         right: RIndex,
     },
+
+    CJumpR {
+        register: RIndex,
+        jump: u16,
+    },
+    CJumpC {
+        constant: CIndex8,
+        jump: u16,
+    },
+    Jump {
+        // could maybe have another u8 or something and mash up the bytes later?
+        jump: i16,
+    },
 }
 
 static_assert_size!(Instruction, 4);
@@ -171,6 +184,9 @@ impl Instruction {
             Instruction::DivRC { .. } => "DIV_RC",
             Instruction::DivCC { .. } => "DIV_CC",
             Instruction::DivCR { .. } => "DIV_CR",
+            Instruction::CJumpR { .. } => "CJMP_R",
+            Instruction::CJumpC { .. } => "CJMP_C",
+            Instruction::Jump { .. } => "JMP",
         }
     }
 }
@@ -312,6 +328,18 @@ impl Display for Instruction {
                 right,
             } => {
                 write!(f, "{:4} {:4} {:4}", destination, left, right)
+            }
+
+            Instruction::CJumpR { register, jump } => {
+                write!(f, "{:4} {:9}", register, jump)
+            }
+
+            Instruction::CJumpC { constant, jump } => {
+                write!(f, "{:4} {:9}", constant, jump)
+            }
+
+            Instruction::Jump { jump } => {
+                write!(f, "{:14}", jump)
             }
         }
     }
