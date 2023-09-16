@@ -60,7 +60,9 @@ impl Display for Prototype<'_> {
                         }
                         | Instruction::NegC { right, .. }
                         | Instruction::NotC { right, .. } => fmt_c(f, constants, right),
-                        Instruction::LoadI { .. } => Ok(()),
+                        Instruction::LoadN { .. }
+                        | Instruction::LoadB { .. }
+                        | Instruction::LoadI { .. } => Ok(()),
                         Instruction::AddRR { .. }
                         | Instruction::SubRR { .. }
                         | Instruction::MulRR { .. }

@@ -416,6 +416,19 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         let dest = self.allocate(dest)?;
 
         match constant {
+            Value::Null => {
+                self.push_instruction(Instruction::LoadN {
+                    destination: dest.into(),
+                });
+                return Ok(dest);
+            }
+            Value::Boolean(v) => {
+                self.push_instruction(Instruction::LoadB {
+                    destination: dest.into(),
+                    boolean: v,
+                });
+                return Ok(dest);
+            }
             Value::Integer(v) => {
                 if let Ok(v) = v.try_into() {
                     self.push_instruction(Instruction::LoadI {

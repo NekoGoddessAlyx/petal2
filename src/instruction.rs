@@ -24,6 +24,13 @@ pub enum Instruction {
         destination: RIndex,
         constant: CIndex16,
     },
+    LoadN {
+        destination: RIndex,
+    },
+    LoadB {
+        destination: RIndex,
+        boolean: bool,
+    },
     LoadI {
         destination: RIndex,
         integer: i16,
@@ -141,6 +148,8 @@ impl Instruction {
             Instruction::ReturnC { .. } => "RETURN_C",
             Instruction::LoadR { .. } => "LOAD_R",
             Instruction::LoadC { .. } => "LOAD_C",
+            Instruction::LoadN { .. } => "LOAD_N",
+            Instruction::LoadB { .. } => "LOAD_B",
             Instruction::LoadI { .. } => "LOAD_I",
             Instruction::NegR { .. } => "NEG_R",
             Instruction::NegC { .. } => "NEG_C",
@@ -170,7 +179,10 @@ impl Display for Instruction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:<8} ", self.name())?;
         match self {
-            Instruction::ReturnR { register } => {
+            Instruction::LoadN {
+                destination: register,
+            }
+            | Instruction::ReturnR { register } => {
                 write!(f, "{:4}          ", register)
             }
 
@@ -194,6 +206,13 @@ impl Display for Instruction {
             | Instruction::NegC { destination, right }
             | Instruction::NotC { destination, right } => {
                 write!(f, "{:4} {:9}", destination, right)
+            }
+
+            Instruction::LoadB {
+                destination,
+                boolean,
+            } => {
+                write!(f, "{:4} {:>9}", destination, boolean)
             }
 
             Instruction::LoadI {

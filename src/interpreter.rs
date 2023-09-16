@@ -69,6 +69,11 @@ pub fn interpret<'gc>(
                     constant,
                 } => mov!(destination, constant!(constant)),
 
+                Instruction::LoadN { destination } => mov!(destination, Value::Null),
+                Instruction::LoadB {
+                    destination,
+                    boolean,
+                } => mov!(destination, Value::Boolean(boolean)),
                 Instruction::LoadI {
                     destination,
                     integer,
