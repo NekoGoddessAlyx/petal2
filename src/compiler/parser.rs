@@ -54,12 +54,15 @@ pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(
 enum PushStat {
     StatementRoot(NodeRef),
     BlockStatement(NodeRef),
+    IfStatementBody(NodeRef),
+    IfStatementElseBody(NodeRef),
     BlockExpression(NodeRef),
 }
 
 #[derive(Copy, Clone, Debug)]
 enum PushExpr {
     VarDeclDef(NodeRef),
+    IfStatCond(NodeRef),
     ExprStat(NodeRef),
 
     VarExprAssignment(NodeRef),
@@ -79,6 +82,7 @@ enum State {
     // statements
     BeginStatement {
         push_stat: PushStat,
+        allow_declarations: bool,
     },
     EndStatement,
 
@@ -90,6 +94,15 @@ enum State {
 
     BeginVariableDeclaration,
     EndVariableDeclaration,
+
+    BeginIfStatement,
+    EndIfStatementCondition {
+        if_stat: NodeRef,
+    },
+    EndIfStatementBody {
+        if_stat: NodeRef,
+    },
+    EndIfStatement,
 
     BeginExpressionStatement,
     EndExpressionStatement,
@@ -149,24 +162,29 @@ impl State {
             },
 
             // statements
-            State::BeginStatement { .. } => match from {
+            State::BeginStatement {
+                allow_declarations, ..
+            } => match from {
                 Some(State::ContinueStatementsRoot { .. })
                 | Some(State::ContinueBlockStatement { .. })
+                | Some(State::EndIfStatementCondition { .. })
+                | Some(State::EndIfStatementBody { .. })
                 | Some(State::ContinueBlockExpression { .. }) => {
-                    parser.begin_statement();
+                    parser.begin_statement(allow_declarations);
                     Ok(())
                 }
                 _ => fail_transfer!(),
             },
             State::EndStatement => match from {
                 Some(State::EndVariableDeclaration)
+                | Some(State::EndIfStatement)
                 | Some(State::EndExpressionStatement)
                 | Some(State::EndBlockStatement) => Ok(()),
                 _ => fail_transfer!(),
             },
 
             State::BeginBlockStatement => match from {
-                Some(State::BeginStatement { push_stat }) => {
+                Some(State::BeginStatement { push_stat, .. }) => {
                     parser.begin_block_statement(push_stat);
                     Ok(())
                 }
@@ -190,7 +208,7 @@ impl State {
             },
 
             State::BeginVariableDeclaration => match from {
-                Some(State::BeginStatement { push_stat }) => {
+                Some(State::BeginStatement { push_stat, .. }) => {
                     parser.begin_variable_declaration(push_stat);
                     Ok(())
                 }
@@ -205,8 +223,37 @@ impl State {
                 _ => fail_transfer!(),
             },
 
+            State::BeginIfStatement => match from {
+                Some(State::BeginStatement { push_stat, .. }) => {
+                    parser.begin_if_statement(push_stat);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+            State::EndIfStatementCondition { if_stat } => match from {
+                Some(State::EndExpression { .. }) => {
+                    parser.begin_if_statement_body(if_stat);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+            State::EndIfStatementBody { if_stat } => match from {
+                Some(State::EndStatement) => {
+                    parser.end_if_statement_body(if_stat);
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+            State::EndIfStatement => match from {
+                Some(State::EndStatement) | Some(State::EndIfStatementBody { .. }) => {
+                    parser.end_if_statement();
+                    Ok(())
+                }
+                _ => fail_transfer!(),
+            },
+
             State::BeginExpressionStatement => match from {
-                Some(State::BeginStatement { push_stat }) => {
+                Some(State::BeginStatement { push_stat, .. }) => {
                     parser.begin_expression_statement(push_stat);
                     Ok(())
                 }
@@ -226,6 +273,7 @@ impl State {
                 precedence,
             } => match from {
                 Some(State::BeginVariableDeclaration { .. })
+                | Some(State::BeginIfStatement)
                 | Some(State::BeginExpressionStatement { .. })
                 | Some(State::BeginExpression { .. })
                 | Some(State::BeginExpressionInfix { .. }) => {
@@ -337,6 +385,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     fn end_of_statement(&mut self) {
         match self.peek() {
             Token::Nl | Token::Eof => {}
+            Token::Else => {}
             Token::BraceClose => {}
             _ => {
                 self.on_error(&"Expected end of statement", Some(self.peek_location()));
@@ -362,10 +411,16 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         match push_stat {
             PushStat::StatementRoot(root) => {
                 self.ast.patch_compound_stat(root, stat, location)
-            },
+            }
             PushStat::BlockStatement(block) => {
                 self.ast.patch_compound_stat(block, stat, location)
-            },
+            }
+            PushStat::IfStatementBody(if_stat) => {
+                self.ast.patch_if_stat_body(if_stat, stat, location)
+            }
+            PushStat::IfStatementElseBody(if_stat) => {
+                self.ast.patch_if_stat_else_body(if_stat, stat, location)
+            }
             PushStat::BlockExpression(block) => {
                 self.ast.patch_block_expr_stat(block, stat, location)
             }
@@ -383,6 +438,9 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             PushExpr::VarDeclDef(var_decl) => {
                 self.ast.patch_var_decl_def(var_decl, expr, location)
             },
+            PushExpr::IfStatCond(if_stat) => {
+                self.ast.patch_if_stat_cond(if_stat, expr, location)
+            }
             PushExpr::ExprStat(root) => {
                 self.ast.patch_expr_stat(root, expr, location)
             },
@@ -414,13 +472,16 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         Ok(())
     }
 
-    fn recover_statements(&mut self) {
+    fn recover_statements(&mut self, accept_brace_close: bool) {
         if self.panic_mode {
+            // TODO: allow callback to accept plain diagnostic information without counting it as an error
+            println!("Recovering...");
             self.panic_mode = false;
 
             loop {
                 match self.peek() {
                     Token::Eof => break,
+                    Token::BraceClose if accept_brace_close => break,
                     token if token.is_statement() => break,
                     _ => self.advance(),
                 };
@@ -444,7 +505,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     }
 
     fn continue_statements_root(&mut self, root: NodeRef) {
-        self.recover_statements();
+        self.recover_statements(false);
 
         self.skip_nl();
         match self.peek() {
@@ -453,6 +514,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 self.push_state(State::ContinueStatementsRoot { root });
                 self.push_state(State::BeginStatement {
                     push_stat: PushStat::StatementRoot(root),
+                    allow_declarations: true,
                 });
             }
         }
@@ -460,19 +522,22 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
     // statements
 
-    fn begin_statement(&mut self) {
+    fn begin_statement(&mut self, allow_declarations: bool) {
         self.skip_nl();
         match self.peek() {
             Token::Val | Token::Var => {
+                if !allow_declarations {
+                    self.on_error(
+                        &"Declarations are not allowed in this position",
+                        Some(self.peek_location()),
+                    );
+                    // no need to recover from this
+                    self.panic_mode = false;
+                }
                 self.push_state(State::BeginVariableDeclaration);
             }
             Token::If => {
-                self.on_error(
-                    &"If statements are not yet implemented",
-                    Some(self.peek_location()),
-                );
-                self.advance();
-                self.push_state(State::EndStatement);
+                self.push_state(State::BeginIfStatement);
             }
             Token::BraceOpen => {
                 self.push_state(State::BeginBlockStatement);
@@ -504,7 +569,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     }
 
     fn continue_block_statement(&mut self, block: NodeRef) {
-        self.recover_statements();
+        self.recover_statements(true);
 
         self.skip_nl();
         match self.peek() {
@@ -515,6 +580,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 self.push_state(State::ContinueBlockStatement { block });
                 self.push_state(State::BeginStatement {
                     push_stat: PushStat::BlockStatement(block),
+                    allow_declarations: true,
                 });
             }
         }
@@ -578,6 +644,65 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     fn end_variable_declaration(&mut self) {
         self.push_state(State::EndStatement);
         self.end_of_statement();
+    }
+
+    fn begin_if_statement(&mut self, push_stat: PushStat) {
+        let if_location = self.peek_location();
+        match self.peek() {
+            Token::If => self.advance(),
+            _ => unreachable!("expected 'if'"),
+        };
+        let if_stat = self.push_statement(push_stat, Stat::If { has_else: false }, if_location);
+
+        match self.peek() {
+            Token::ParenOpen => {
+                self.advance();
+            }
+            _ => {
+                self.on_error(&"Expected '(' after 'if'", Some(self.peek_location()));
+            }
+        }
+        self.push_state(State::EndIfStatementCondition { if_stat });
+        self.push_state(State::BeginExpression {
+            push_expr: PushExpr::IfStatCond(if_stat),
+            precedence: Precedence::root(),
+        });
+    }
+
+    fn begin_if_statement_body(&mut self, if_stat: NodeRef) {
+        match self.peek() {
+            Token::ParenClose => {
+                self.advance();
+            }
+            _ => {
+                self.on_error(&"Expected ')' after condition", Some(self.peek_location()));
+            }
+        }
+        self.push_state(State::EndIfStatementBody { if_stat });
+        self.push_state(State::BeginStatement {
+            push_stat: PushStat::IfStatementBody(if_stat),
+            allow_declarations: false,
+        });
+    }
+
+    fn end_if_statement_body(&mut self, if_stat: NodeRef) {
+        match self.peek() {
+            Token::Else => {
+                self.advance();
+                self.push_state(State::EndIfStatement);
+                self.push_state(State::BeginStatement {
+                    push_stat: PushStat::IfStatementElseBody(if_stat),
+                    allow_declarations: false,
+                });
+            }
+            _ => {
+                self.push_state(State::EndIfStatement);
+            }
+        }
+    }
+
+    fn end_if_statement(&mut self) {
+        self.push_state(State::EndStatement);
     }
 
     fn begin_expression_statement(&mut self, push_stat: PushStat) {
@@ -799,7 +924,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     }
 
     fn continue_block_expression(&mut self, precedence: Precedence, block: NodeRef) {
-        self.recover_statements();
+        self.recover_statements(true);
 
         self.skip_nl();
         match self.peek() {
@@ -810,6 +935,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 self.push_state(State::ContinueBlockExpression { precedence, block });
                 self.push_state(State::BeginStatement {
                     push_stat: PushStat::BlockExpression(block),
+                    allow_declarations: true,
                 });
             }
         }

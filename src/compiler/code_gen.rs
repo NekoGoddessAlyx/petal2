@@ -561,6 +561,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
 
                 Ok(())
             }
+            Stat::If { .. } => todo!("if statements not yet ready"),
             Stat::Expr => {
                 self.push_state(State::ExitExprStat);
                 self.push_state(State::EnterExprAnywhere);

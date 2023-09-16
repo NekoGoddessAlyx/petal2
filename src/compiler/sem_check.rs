@@ -291,6 +291,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                             self.push_state(State::EnterExpr);
                         }
                     }
+                    Stat::If { .. } => todo!("if statements not yet ready"),
                     Stat::Expr => {
                         self.push_state(State::EnterExpr);
                     }

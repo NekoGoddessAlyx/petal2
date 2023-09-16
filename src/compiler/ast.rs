@@ -5,6 +5,7 @@ use crate::compiler::ast::display::write_ast;
 use crate::compiler::lexer::Span;
 use crate::compiler::string::CompileString;
 
+// TODO: dedicated AstVisitor struct?
 #[derive(Debug)]
 pub struct Ast<S> {
     pub nodes: Box<[Node<S>]>,
@@ -60,6 +61,9 @@ pub enum Stat<S> {
         mutability: Mutability,
         name: S,
         def: bool,
+    },
+    If {
+        has_else: bool,
     },
     Expr,
 }
@@ -223,6 +227,9 @@ impl<S: CompileString> AstBuilder<S> {
 
     // statements
 
+    // TODO: could replace most/all instances of unreachable! with a result?
+    // would require having the parser adapt to results everywhere
+
     pub fn patch_compound_stat(
         &mut self,
         compound_stat: NodeRef,
@@ -255,6 +262,42 @@ impl<S: CompileString> AstBuilder<S> {
                 *def = true;
             }
             _ => unreachable!("expected Stat::VarDecl"),
+        }
+
+        node
+    }
+
+    pub fn patch_if_stat_cond(
+        &mut self,
+        _if_stat: NodeRef,
+        node: Expr<S>,
+        location: Span,
+    ) -> NodeRef {
+        self.push(node, location)
+    }
+
+    pub fn patch_if_stat_body(
+        &mut self,
+        _if_stat: NodeRef,
+        node: Stat<S>,
+        location: Span,
+    ) -> NodeRef {
+        self.push(node, location)
+    }
+
+    pub fn patch_if_stat_else_body(
+        &mut self,
+        if_stat: NodeRef,
+        node: Stat<S>,
+        location: Span,
+    ) -> NodeRef {
+        let node = self.push(node, location);
+
+        match self.nodes.get_mut(if_stat.get()) {
+            Some(Node::Stat(Stat::If { has_else, .. })) => {
+                *has_else = true;
+            }
+            _ => unreachable!("expected Stat::If"),
         }
 
         node
@@ -394,6 +437,7 @@ impl<S: CompileString> AstBuilder<S> {
                     current_block_expr = Some(last_stat);
                 }
                 Some(Node::Stat(Stat::Expr)) => {
+                    // TODO: remove function?
                     self.nodes.remove(last_stat.get());
                     self.locations.remove(last_stat.get());
                     num_removed += 1;
@@ -403,6 +447,7 @@ impl<S: CompileString> AstBuilder<S> {
 
             match len.get() {
                 1 => {
+                    // TODO: remove function?
                     self.nodes.remove(block_expr.get());
                     self.locations.remove(block_expr.get());
                     num_removed += 1;
@@ -426,6 +471,7 @@ impl<S: CompileString> AstBuilder<S> {
 
 mod display {
     use std::fmt::{Debug, Error, Formatter, Write};
+    use std::iter::Peekable;
 
     use smallvec::{smallvec, SmallVec};
 
@@ -436,7 +482,7 @@ mod display {
     pub fn write_ast<S: CompileString>(ast: &Ast<S>, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut pretty_formatter = AstPrettyPrinter {
             f: PrettyFormatter::new(f),
-            nodes: ast.nodes.iter(),
+            nodes: ast.nodes.iter().peekable(),
             state: smallvec![],
         };
         pretty_formatter.push_state(State::EnterRoot);
@@ -467,7 +513,10 @@ mod display {
         EnterRoot,
 
         ContinueCompoundStat(RefLen),
+        EnterStatAsBlock,
         EnterStat,
+        ContinueIfStatBody(bool),
+        ContinueIfStatElse,
 
         EnterExpr,
         ContinueBinOp(BinOp),
@@ -492,13 +541,13 @@ mod display {
         }
     }
 
-    pub struct AstPrettyPrinter<'formatter, W, I> {
+    pub struct AstPrettyPrinter<'formatter, W, I: Iterator> {
         f: PrettyFormatter<'formatter, W>,
-        nodes: I,
+        nodes: Peekable<I>,
         state: SmallVec<[State; 16]>,
     }
 
-    impl<W: Write, I> Write for AstPrettyPrinter<'_, W, I> {
+    impl<W: Write, I: Iterator> Write for AstPrettyPrinter<'_, W, I> {
         fn write_str(&mut self, s: &str) -> std::fmt::Result {
             self.f.write_str(s)
         }
@@ -530,6 +579,19 @@ mod display {
             match self.next()? {
                 Node::Root(node) => Ok(node),
                 _ => Err(PrinterErr::ExpectedRoot),
+            }
+        }
+
+        #[inline]
+        fn advance(&mut self) {
+            self.nodes.next();
+        }
+
+        #[inline]
+        fn peek_stat(&mut self) -> Result<&'ast Stat<S>> {
+            match self.nodes.peek().ok_or(PrinterErr::ExpectedNode)? {
+                Node::Stat(node) => Ok(node),
+                _ => Err(PrinterErr::ExpectedStat),
             }
         }
 
@@ -578,6 +640,19 @@ mod display {
                             self.push_state(State::EnterStat);
                         }
                     },
+                    State::EnterStatAsBlock => {
+                        write!(self, "{{")?;
+                        self.indent();
+                        match *self.peek_stat()? {
+                            Stat::Compound { len, .. } => {
+                                self.advance();
+                                self.push_state(State::ContinueCompoundStat(len));
+                            }
+                            _ => {
+                                self.push_state(State::ContinueCompoundStat(RefLen(1)));
+                            }
+                        }
+                    }
                     State::EnterStat => {
                         writeln!(self)?;
                         match *self.next_stat()? {
@@ -600,10 +675,26 @@ mod display {
                                     self.push_state(State::EnterExpr);
                                 }
                             }
+                            Stat::If { has_else } => {
+                                write!(self, "if (")?;
+                                self.push_state(State::ContinueIfStatBody(has_else));
+                                self.push_state(State::EnterExpr);
+                            }
                             Stat::Expr => {
                                 self.push_state(State::EnterExpr);
                             }
                         }
+                    }
+                    State::ContinueIfStatBody(has_else) => {
+                        write!(self, ") ")?;
+                        if has_else {
+                            self.push_state(State::ContinueIfStatElse);
+                        }
+                        self.push_state(State::EnterStatAsBlock);
+                    }
+                    State::ContinueIfStatElse => {
+                        write!(self, " else ")?;
+                        self.push_state(State::EnterStatAsBlock);
                     }
                     State::EnterExpr => match *self.next_expr()? {
                         Expr::Null => write!(self, "null")?,
