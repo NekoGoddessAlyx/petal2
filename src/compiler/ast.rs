@@ -4,6 +4,8 @@ use std::fmt::{Display, Formatter};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use thiserror::Error;
+
 use crate::compiler::ast::display::write_ast;
 use crate::compiler::lexer::Span;
 use crate::compiler::sem_check::Binding;
@@ -12,18 +14,25 @@ use crate::compiler::string::CompileString;
 pub struct Unchecked;
 pub struct Semantics;
 
-// TODO: dedicated AstVisitor struct?
+type Bindings<S> = HashMap<NodeRef, Rc<Binding<S>>>;
+
 #[derive(Debug)]
 pub struct Ast<S, T> {
     nodes: Vec<Node<S>>,
     locations: Vec<Span>,
-    bindings: HashMap<NodeRef, Rc<Binding<S>>>,
+    bindings: Bindings<S>,
     state: PhantomData<T>,
 }
 
-impl<S: CompileString, T> Display for Ast<S, T> {
+impl<S: CompileString> Display for Ast1<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write_ast(self, f)
+        write_ast(self.iterator(), f)
+    }
+}
+
+impl<S: CompileString> Display for Ast2<S> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write_ast(self.iterator(), f)
     }
 }
 
@@ -39,7 +48,7 @@ impl<S, T> Ast<S, T> {
 
 impl<S> Ast<S, Unchecked> {
     #[must_use]
-    pub fn to_semantics(self, bindings: HashMap<NodeRef, Rc<Binding<S>>>) -> Ast<S, Semantics> {
+    pub fn into_semantics(self, bindings: Bindings<S>) -> Ast<S, Semantics> {
         Ast {
             nodes: self.nodes,
             locations: self.locations,
@@ -47,11 +56,29 @@ impl<S> Ast<S, Unchecked> {
             state: PhantomData,
         }
     }
+
+    pub fn iterator(&self) -> Ast1Iterator<S> {
+        Ast1Iterator {
+            nodes: &self.nodes,
+            locations: &self.locations,
+            bindings: (),
+            cursor: 0,
+        }
+    }
 }
 
 impl<S> Ast<S, Semantics> {
-    pub fn bindings(&self) -> &HashMap<NodeRef, Rc<Binding<S>>> {
+    pub fn bindings(&self) -> &Bindings<S> {
         &self.bindings
+    }
+
+    pub fn iterator(&self) -> Ast2Iterator<S> {
+        Ast2Iterator {
+            nodes: &self.nodes,
+            locations: &self.locations,
+            bindings: &self.bindings,
+            cursor: 0,
+        }
     }
 }
 
@@ -260,7 +287,7 @@ impl<S: CompileString> AstBuilder<S> {
         Ast1 {
             nodes: self.nodes,
             locations: self.locations,
-            bindings: HashMap::new(),
+            bindings: Bindings::new(),
             state: PhantomData,
         }
     }
@@ -524,43 +551,189 @@ impl<S: CompileString> AstBuilder<S> {
     }
 }
 
+// walker
+
+#[derive(Debug, Error)]
+pub enum NodeError {
+    #[error("Expected node")]
+    MissingNode,
+    #[error("Expected root node")]
+    ExpectedRoot,
+    #[error("Expected statement node")]
+    ExpectedStat,
+    #[error("Expected expression node")]
+    ExpectedExpr,
+}
+
+/// Crude helper for iterating over an Ast
+// TODO: make it nicer?
+pub struct AstIterator<'ast, S, B> {
+    nodes: &'ast [Node<S>],
+    locations: &'ast [Span],
+    bindings: B,
+    cursor: usize,
+}
+
+impl<'ast, S, B> AstIterator<'ast, S, B> {
+    /// Returns the ref to the previous node
+    pub fn previous_node(&self) -> NodeRef {
+        NodeRef::new(self.cursor.saturating_sub(1))
+    }
+
+    // /// Returns the ref to the next node
+    // pub fn next_node(&self) -> NodeRef {
+    //     NodeRef::new(self.cursor)
+    // }
+
+    /// Returns the next node without advancing
+    pub fn peek(&self) -> Result<&'ast Node<S>, NodeError> {
+        self.nodes.get(self.cursor).ok_or(NodeError::MissingNode)
+    }
+
+    // /// Returns the next node without advancing
+    // /// The node must be a Root node.
+    // pub fn peek_root(&mut self) -> Result<&'ast Root, NodeError> {
+    //     match self.peek()? {
+    //         Node::Root(root) => Ok(root),
+    //         _ => Err(NodeError::ExpectedRoot),
+    //     }
+    // }
+
+    /// Returns the next node without advancing
+    /// The node must be a Stat node.
+    pub fn peek_stat(&mut self) -> Result<&'ast Stat<S>, NodeError> {
+        match self.peek()? {
+            Node::Stat(stat) => Ok(stat),
+            _ => Err(NodeError::ExpectedStat),
+        }
+    }
+
+    // /// Returns the next node without advancing
+    // /// The node must be an Expr node.
+    // pub fn peek_expr(&mut self) -> Result<&'ast Expr<S>, NodeError> {
+    //     match self.peek()? {
+    //         Node::Expr(expr) => Ok(expr),
+    //         _ => Err(NodeError::ExpectedExpr),
+    //     }
+    // }
+
+    // /// Returns the source location of the next node
+    // pub fn peek_location(&self) -> Result<Span, NodeError> {
+    //     self.locations
+    //         .get(self.cursor)
+    //         .copied()
+    //         .ok_or(NodeError::MissingNode)
+    // }
+
+    // /// Returns the source location of the last node
+    // pub fn location(&self) -> Result<Span, NodeError> {
+    //     self.locations
+    //         .get(self.cursor.saturating_sub(1))
+    //         .copied()
+    //         .ok_or(NodeError::MissingNode)
+    // }
+
+    /// Returns the next node and advances the cursor
+    pub fn next(&mut self) -> Result<&'ast Node<S>, NodeError> {
+        let node = self.peek();
+        self.cursor += 1;
+        node
+    }
+
+    /// Returns the next node and advances the cursor.
+    /// The node must be a Root node.
+    pub fn next_root(&mut self) -> Result<&'ast Root, NodeError> {
+        match self.next()? {
+            Node::Root(root) => Ok(root),
+            _ => Err(NodeError::ExpectedRoot),
+        }
+    }
+
+    /// Returns the next node and advances the cursor.
+    /// The node must be a Stat node.
+    pub fn next_stat(&mut self) -> Result<&'ast Stat<S>, NodeError> {
+        match self.next()? {
+            Node::Stat(stat) => Ok(stat),
+            _ => Err(NodeError::ExpectedStat),
+        }
+    }
+
+    /// Returns the next node and advances the cursor.
+    /// The node must be an Expr node.
+    pub fn next_expr(&mut self) -> Result<&'ast Expr<S>, NodeError> {
+        match self.next()? {
+            Node::Expr(expr) => Ok(expr),
+            _ => Err(NodeError::ExpectedExpr),
+        }
+    }
+
+    /// Advances the cursor with no checks
+    pub fn advance(&mut self) {
+        self.cursor += 1;
+    }
+
+    /// Returns the location associated with a given node
+    pub fn location_of(&self, node: NodeRef) -> Option<Span> {
+        self.locations.get(node.get()).copied()
+    }
+
+    pub fn get_stat_at(&self, node: NodeRef) -> Result<&'ast Stat<S>, NodeError> {
+        match self.nodes.get(node.get()).ok_or(NodeError::MissingNode)? {
+            Node::Stat(stat) => Ok(stat),
+            _ => Err(NodeError::ExpectedStat),
+        }
+    }
+}
+
+impl<'ast, S> AstIterator<'ast, S, &'ast Bindings<S>> {
+    /// Returns the binding (if one exists) associated with the last node
+    pub fn get_binding_at(&self, node: NodeRef) -> Option<&'ast Binding<S>> {
+        self.bindings.get(&node).map(|b| &**b)
+    }
+}
+
+pub type Ast1Iterator<'ast, S> = AstIterator<'ast, S, ()>;
+pub type Ast2Iterator<'ast, S> = AstIterator<'ast, S, &'ast Bindings<S>>;
+
 // display
 
 mod display {
     use std::fmt::{Debug, Error, Formatter, Write};
-    use std::iter::Peekable;
 
     use smallvec::{smallvec, SmallVec};
+    use thiserror::Error;
 
-    use crate::compiler::ast::{Ast, BinOp, Expr, Mutability, Node, RefLen, Root, Stat, UnOp};
+    use crate::compiler::ast::{
+        AstIterator, BinOp, Expr, Mutability, NodeError, RefLen, Root, Stat, UnOp,
+    };
     use crate::compiler::string::CompileString;
     use crate::pretty_formatter::PrettyFormatter;
 
-    pub fn write_ast<S: CompileString, T>(
-        ast: &Ast<S, T>,
+    pub fn write_ast<S: CompileString, B>(
+        ast: AstIterator<S, B>,
         f: &mut Formatter<'_>,
     ) -> std::fmt::Result {
         let mut pretty_formatter = AstPrettyPrinter {
             f: PrettyFormatter::new(f),
-            nodes: ast.nodes.iter().peekable(),
+            ast,
             state: smallvec![],
         };
         pretty_formatter.push_state(State::EnterRoot);
         match pretty_formatter.visit() {
             Ok(_) => Ok(()),
-            Err(PrinterErr::ExpectedNode) => {
+            Err(PrinterErr::NodeError(NodeError::MissingNode)) => {
                 write!(f, "<invalid ast: expected node>")?;
                 Ok(())
             }
-            Err(PrinterErr::ExpectedRoot) => {
+            Err(PrinterErr::NodeError(NodeError::ExpectedRoot)) => {
                 write!(f, "<invalid ast: expected root>")?;
                 Ok(())
             }
-            Err(PrinterErr::ExpectedStat) => {
+            Err(PrinterErr::NodeError(NodeError::ExpectedStat)) => {
                 write!(f, "<invalid ast: expected statement>")?;
                 Ok(())
             }
-            Err(PrinterErr::ExpectedExpr) => {
+            Err(PrinterErr::NodeError(NodeError::ExpectedExpr)) => {
                 write!(f, "<invalid ast: expected expression>")?;
                 Ok(())
             }
@@ -587,37 +760,30 @@ mod display {
 
     type Result<T> = std::result::Result<T, PrinterErr>;
 
+    #[derive(Debug, Error)]
     enum PrinterErr {
-        ExpectedNode,
-        ExpectedRoot,
-        ExpectedStat,
-        ExpectedExpr,
-        WriteErr(Error),
+        #[error(transparent)]
+        NodeError(#[from] NodeError),
+        #[error(transparent)]
+        WriteErr(#[from] Error),
     }
 
-    impl From<Error> for PrinterErr {
-        fn from(value: Error) -> Self {
-            Self::WriteErr(value)
-        }
-    }
-
-    pub struct AstPrettyPrinter<'formatter, W, I: Iterator> {
+    pub struct AstPrettyPrinter<'formatter, 'ast, W, S, B> {
         f: PrettyFormatter<'formatter, W>,
-        nodes: Peekable<I>,
+        ast: AstIterator<'ast, S, B>,
         state: SmallVec<[State; 16]>,
     }
 
-    impl<W: Write, I: Iterator> Write for AstPrettyPrinter<'_, W, I> {
+    impl<W: Write, S, B> Write for AstPrettyPrinter<'_, '_, W, S, B> {
         fn write_str(&mut self, s: &str) -> std::fmt::Result {
             self.f.write_str(s)
         }
     }
 
-    impl<'formatter, 'ast, W, I, S> AstPrettyPrinter<'formatter, W, I>
+    impl<'formatter, 'ast, W, S, B> AstPrettyPrinter<'formatter, 'ast, W, S, B>
     where
         W: Write,
-        I: Iterator<Item = &'ast Node<S>>,
-        S: CompileString + 'ast,
+        S: CompileString,
     {
         #[inline]
         fn indent(&mut self) {
@@ -627,48 +793,6 @@ mod display {
         #[inline]
         fn unindent(&mut self) {
             self.f.unindent();
-        }
-
-        #[inline]
-        fn next(&mut self) -> Result<&'ast Node<S>> {
-            self.nodes.next().ok_or(PrinterErr::ExpectedNode)
-        }
-
-        #[inline]
-        fn next_root(&mut self) -> Result<&'ast Root> {
-            match self.next()? {
-                Node::Root(node) => Ok(node),
-                _ => Err(PrinterErr::ExpectedRoot),
-            }
-        }
-
-        #[inline]
-        fn advance(&mut self) {
-            self.nodes.next();
-        }
-
-        #[inline]
-        fn peek_stat(&mut self) -> Result<&'ast Stat<S>> {
-            match self.nodes.peek().ok_or(PrinterErr::ExpectedNode)? {
-                Node::Stat(node) => Ok(node),
-                _ => Err(PrinterErr::ExpectedStat),
-            }
-        }
-
-        #[inline]
-        fn next_stat(&mut self) -> Result<&'ast Stat<S>> {
-            match self.next()? {
-                Node::Stat(node) => Ok(node),
-                _ => Err(PrinterErr::ExpectedStat),
-            }
-        }
-
-        #[inline]
-        fn next_expr(&mut self) -> Result<&'ast Expr<S>> {
-            match self.next()? {
-                Node::Expr(node) => Ok(node),
-                _ => Err(PrinterErr::ExpectedExpr),
-            }
         }
 
         #[inline]
@@ -684,7 +808,7 @@ mod display {
         fn visit(mut self) -> Result<()> {
             while let Some(state) = self.pop_state() {
                 match state {
-                    State::EnterRoot => match self.next_root()? {
+                    State::EnterRoot => match self.ast.next_root()? {
                         Root::Statements => {
                             self.push_state(State::EnterStat);
                         }
@@ -703,9 +827,9 @@ mod display {
                     State::EnterStatAsBlock => {
                         write!(self, "{{")?;
                         self.indent();
-                        match *self.peek_stat()? {
+                        match *self.ast.peek_stat()? {
                             Stat::Compound { len, .. } => {
-                                self.advance();
+                                self.ast.advance();
                                 self.push_state(State::ContinueCompoundStat(len));
                             }
                             _ => {
@@ -715,7 +839,7 @@ mod display {
                     }
                     State::EnterStat => {
                         writeln!(self)?;
-                        match *self.next_stat()? {
+                        match *self.ast.next_stat()? {
                             Stat::Compound { len, .. } => {
                                 write!(self, "{{")?;
                                 self.indent();
@@ -756,7 +880,7 @@ mod display {
                         write!(self, " else ")?;
                         self.push_state(State::EnterStatAsBlock);
                     }
-                    State::EnterExpr => match *self.next_expr()? {
+                    State::EnterExpr => match *self.ast.next_expr()? {
                         Expr::Null => write!(self, "null")?,
                         Expr::Bool(true) => write!(self, "true")?,
                         Expr::Bool(false) => write!(self, "false")?,

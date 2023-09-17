@@ -7,7 +7,9 @@ use std::rc::Rc;
 use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
 
-use crate::compiler::ast::{Ast1, Ast2, Expr, Mutability, Node, NodeRef, RefLen, Root, Stat};
+use crate::compiler::ast::{
+    Ast1, Ast1Iterator, Ast2, Expr, Mutability, NodeError, NodeRef, RefLen, Root, Stat,
+};
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::Span;
 use crate::compiler::string::CompileString;
@@ -53,16 +55,8 @@ impl<S: CompileString> Diagnostic for SemCheckMsg<S> {
 pub enum SemCheckError {
     #[error("SemCheck failed")]
     FailedSemCheck,
-    #[error("Unexpected ast node")]
-    UnexpectedNode,
-    #[error("Expected ast node")]
-    ExpectedNode,
-    #[error("Expected root ast node")]
-    ExpectedRoot,
-    #[error("Expected stat ast node")]
-    ExpectedStat,
-    #[error("Expected expr node")]
-    ExpectedExpr,
+    #[error(transparent)]
+    NodeError(#[from] NodeError),
     #[error("Context is missing")]
     MissingContext,
     #[error("Scope is missing")]
@@ -87,9 +81,7 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast1<S>) -> Re
         callback,
         had_error: false,
 
-        nodes: ast.nodes(),
-        locations: &ast.locations(),
-        cursor: 0,
+        ast: ast.iterator(),
 
         state: smallvec![],
 
@@ -109,7 +101,7 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast1<S>) -> Re
         true => Err(SemCheckError::FailedSemCheck),
         false => {
             let bindings = sem_check.bindings;
-            Ok(ast.to_semantics(bindings))
+            Ok(ast.into_semantics(bindings))
         }
     }
 }
@@ -135,9 +127,7 @@ struct SemCheck<'ast, C, S> {
     callback: C,
     had_error: bool,
 
-    nodes: &'ast [Node<S>],
-    locations: &'ast [Span],
-    cursor: usize,
+    ast: Ast1Iterator<'ast, S>,
 
     state: SmallVec<[State; 32]>,
 
@@ -149,48 +139,6 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     fn on_error(&mut self, message: &dyn Diagnostic, source: Option<Span>) {
         self.had_error = true;
         (self.callback)(message, source);
-    }
-
-    fn next(&mut self) -> Result<&'ast Node<S>> {
-        let node = self.nodes.get(self.cursor);
-        self.cursor += 1;
-        node.ok_or(SemCheckError::ExpectedNode)
-    }
-
-    fn next_root(&mut self) -> Result<&'ast Root> {
-        match self.next()? {
-            Node::Root(node) => Ok(node),
-            _ => Err(SemCheckError::ExpectedRoot),
-        }
-    }
-
-    fn next_stat(&mut self) -> Result<&'ast Stat<S>> {
-        match self.next()? {
-            Node::Stat(node) => Ok(node),
-            _ => Err(SemCheckError::ExpectedStat),
-        }
-    }
-
-    fn next_expr(&mut self) -> Result<&'ast Expr<S>> {
-        match self.next()? {
-            Node::Expr(node) => Ok(node),
-            _ => Err(SemCheckError::ExpectedExpr),
-        }
-    }
-
-    fn get_stat(&mut self, node: NodeRef) -> Result<&'ast Stat<S>> {
-        match self.nodes.get(node.get()) {
-            Some(Node::Stat(node)) => Ok(node),
-            _ => Err(SemCheckError::ExpectedStat),
-        }
-    }
-
-    fn last_node_as_ref(&self) -> NodeRef {
-        NodeRef::new(self.cursor.saturating_sub(1))
-    }
-
-    fn get_location(&self, index: NodeRef) -> Span {
-        self.locations[index.get()]
     }
 
     fn push_state(&mut self, state: State) {
@@ -240,7 +188,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                 let binding = entry.get().clone();
                 self.on_error(
                     &SemCheckMsg::VariableAlreadyDeclared(name),
-                    Some(self.get_location(node)),
+                    self.ast.location_of(node),
                 );
                 Ok(binding)
             }
@@ -280,19 +228,19 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     fn visit(&mut self) -> Result<()> {
         while let Some(state) = self.pop_state() {
             match state {
-                State::EnterRoot => match self.next_root()? {
+                State::EnterRoot => match self.ast.next_root()? {
                     Root::Statements => {
                         self.push_state(State::EnterStat);
                     }
                 },
-                State::EnterStat => match *self.next_stat()? {
+                State::EnterStat => match *self.ast.next_stat()? {
                     Stat::Compound { len, .. } => {
                         self.begin_scope()?;
                         self.push_state(State::EndScope);
                         self.push_state(State::ContinueCompoundStat(len));
                     }
                     Stat::VarDecl { def, .. } => {
-                        self.push_state(State::DeclareVar(self.last_node_as_ref()));
+                        self.push_state(State::DeclareVar(self.ast.previous_node()));
                         if def {
                             self.push_state(State::EnterExpr);
                         }
@@ -314,7 +262,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                         self.push_state(State::EnterStat);
                     }
                 }
-                State::EnterExpr => match *self.next_expr()? {
+                State::EnterExpr => match *self.ast.next_expr()? {
                     Expr::Null
                     | Expr::Bool(_)
                     | Expr::Integer(_)
@@ -324,7 +272,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                         ref name,
                         assignment,
                     } => {
-                        let node = self.last_node_as_ref();
+                        let node = self.ast.previous_node();
 
                         match self.lookup(name.clone()) {
                             Some(binding) => {
@@ -332,7 +280,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                                     Mutability::Immutable if assignment => {
                                         self.on_error(
                                             &SemCheckMsg::CannotAssignToVal(binding.name.clone()),
-                                            Some(self.get_location(node)),
+                                            self.ast.location_of(node),
                                         );
                                     }
                                     _ => {}
@@ -343,7 +291,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                             None => {
                                 self.on_error(
                                     &SemCheckMsg::VariableNotFound(name.clone()),
-                                    Some(self.get_location(node)),
+                                    self.ast.location_of(node),
                                 );
                             }
                         };
@@ -374,13 +322,13 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                 State::EndScope => {
                     self.end_scope()?;
                 }
-                State::DeclareVar(node) => match self.get_stat(node)? {
+                State::DeclareVar(node) => match self.ast.get_stat_at(node)? {
                     Stat::VarDecl {
                         mutability, name, ..
                     } => {
                         self.declare(node, *mutability, name.clone())?;
                     }
-                    _ => return Err(SemCheckError::UnexpectedNode),
+                    _ => return Err(SemCheckError::NodeError(NodeError::ExpectedStat)),
                 },
             }
         }

@@ -2,13 +2,12 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::{Neg, Not};
-use std::rc::Rc;
 
 use gc_arena::Mutation;
 use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
 
-use crate::compiler::ast::{BinOp, NodeRef, RefLen, Root, UnOp};
+use crate::compiler::ast::{Ast2, Ast2Iterator, BinOp, NodeError, NodeRef, RefLen, Root, UnOp};
 use crate::compiler::callback::Diagnostic;
 use crate::compiler::registers::{Register, Registers};
 use crate::instruction::{CIndex16, CIndex8, Instruction, RIndex};
@@ -16,24 +15,15 @@ use crate::prototype::Prototype;
 use crate::value::Value;
 use crate::{MessageKind, PString, StringInterner};
 
-type Ast<'gc> = crate::compiler::ast::Ast2<PString<'gc>>;
-type Node<'gc> = crate::compiler::ast::Node<PString<'gc>>;
 type Stat<'gc> = crate::compiler::ast::Stat<PString<'gc>>;
 type Expr<'gc> = crate::compiler::ast::Expr<PString<'gc>>;
-type Binding<'gc> = Rc<crate::compiler::sem_check::Binding<PString<'gc>>>;
 
 #[derive(Debug, Error)]
 pub enum CodeGenError {
     #[error("{}", .0)]
     CodeGenFailed(#[from] CodeGenMessage),
-    #[error("Expected ast node")]
-    ExpectedNode,
-    #[error("Expected root ast node")]
-    ExpectedRoot,
-    #[error("Expected stat ast node")]
-    ExpectedStat,
-    #[error("Expected expr node")]
-    ExpectedExpr,
+    #[error(transparent)]
+    NodeError(#[from] NodeError),
     #[error("Invalid state transition")]
     BadTransition,
     #[error("Missing variable binding")]
@@ -70,7 +60,7 @@ pub type Result<T> = std::result::Result<T, CodeGenError>;
 
 pub fn code_gen<'gc, I: StringInterner<'gc, String = PString<'gc>>>(
     mc: &Mutation<'gc>,
-    ast: Ast<'gc>,
+    ast: Ast2<PString<'gc>>,
     mut strings: I,
 ) -> Result<Prototype<'gc>> {
     let name = strings.intern(mc, b"test");
@@ -84,9 +74,7 @@ pub fn code_gen<'gc, I: StringInterner<'gc, String = PString<'gc>>>(
 
     let mut code_gen = CodeGen {
         mc,
-        nodes: ast.nodes(),
-        cursor: 0,
-        bindings: ast.bindings(),
+        ast: ast.iterator(),
 
         strings,
 
@@ -338,9 +326,7 @@ impl<'gc> State<'gc> {
 
 struct CodeGen<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> {
     mc: &'ast Mutation<'gc>,
-    nodes: &'ast [Node<'gc>],
-    cursor: usize,
-    bindings: &'ast HashMap<NodeRef, Binding<'gc>>,
+    ast: Ast2Iterator<'ast, PString<'gc>>,
 
     // TODO: remove allow when needed
     #[allow(dead_code)]
@@ -352,37 +338,6 @@ struct CodeGen<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> {
 }
 
 impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast, I> {
-    fn next(&mut self) -> Result<&'ast Node<'gc>> {
-        let node = self.nodes.get(self.cursor);
-        self.cursor += 1;
-        node.ok_or(CodeGenError::ExpectedNode)
-    }
-
-    fn next_root(&mut self) -> Result<&'ast Root> {
-        match self.next()? {
-            Node::Root(node) => Ok(node),
-            _ => Err(CodeGenError::ExpectedRoot),
-        }
-    }
-
-    fn next_stat(&mut self) -> Result<&'ast Stat<'gc>> {
-        match self.next()? {
-            Node::Stat(node) => Ok(node),
-            _ => Err(CodeGenError::ExpectedStat),
-        }
-    }
-
-    fn next_expr(&mut self) -> Result<&'ast Expr<'gc>> {
-        match self.next()? {
-            Node::Expr(node) => Ok(node),
-            _ => Err(CodeGenError::ExpectedExpr),
-        }
-    }
-
-    fn last_node_as_ref(&self) -> NodeRef {
-        NodeRef::new(self.cursor.saturating_sub(1))
-    }
-
     fn push_state(&mut self, state: State<'gc>) {
         self.state.push(state);
     }
@@ -635,7 +590,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     // root
 
     fn enter_root(&mut self) -> Result<()> {
-        match self.next_root()? {
+        match self.ast.next_root()? {
             Root::Statements => {
                 self.push_state(State::EnterStat);
             }
@@ -647,8 +602,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     // statements
 
     fn enter_statement(&mut self) -> Result<()> {
-        let statement = self.next_stat()?;
-        let node = self.last_node_as_ref();
+        let statement = self.ast.next_stat()?;
         match *statement {
             Stat::Compound { len, .. } => {
                 let stack_top = self.current_function.registers.stack_top();
@@ -659,8 +613,8 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
             }
             Stat::VarDecl { def, .. } => {
                 let binding = self
-                    .bindings
-                    .get(&node)
+                    .ast
+                    .get_binding_at(self.ast.previous_node())
                     .ok_or(CodeGenError::MissingBinding)?;
                 let local = binding.index;
                 let register = self
@@ -803,8 +757,8 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     // expressions
 
     fn enter_expression_anywhere(&mut self) -> Result<()> {
-        let expr = self.next_expr()?;
-        let node = self.last_node_as_ref();
+        let expr = self.ast.next_expr()?;
+        let node = self.ast.previous_node();
         self.consume_expr_anywhere(node, expr)
     }
 
@@ -837,8 +791,8 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
             }
             Expr::Var { assignment, .. } => {
                 let binding = self
-                    .bindings
-                    .get(&node)
+                    .ast
+                    .get_binding_at(node)
                     .ok_or(CodeGenError::MissingBinding)?;
                 let local = binding.index;
                 let local = self
@@ -874,8 +828,8 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     }
 
     fn enter_expression(&mut self, dest: ExprDest) -> Result<()> {
-        let expr = self.next_expr()?;
-        let node = self.last_node_as_ref();
+        let expr = self.ast.next_expr()?;
+        let node = self.ast.previous_node();
         self.consume_expr(node, expr, dest)
     }
 
@@ -913,8 +867,8 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
             }
             Expr::Var { assignment, .. } => {
                 let binding = self
-                    .bindings
-                    .get(&node)
+                    .ast
+                    .get_binding_at(node)
                     .ok_or(CodeGenError::MissingBinding)?;
                 let local = binding.index;
                 let local = self
@@ -1126,7 +1080,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     fn skip_statement(&mut self) -> Result<()> {
         self.push_state(State::ExitSkip);
 
-        let statement = self.next_stat()?;
+        let statement = self.ast.next_stat()?;
         match *statement {
             Stat::Compound { len, .. } => {
                 self.push_state(State::SkipCompoundStat(len));
@@ -1163,7 +1117,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     fn skip_expr(&mut self) -> Result<()> {
         self.push_state(State::ExitSkip);
 
-        let expr = self.next_expr()?;
+        let expr = self.ast.next_expr()?;
         match *expr {
             Expr::Null => {}
             Expr::Bool(_) => {}
