@@ -95,6 +95,7 @@ pub enum Root {
 pub enum Stat<S> {
     Compound {
         len: RefLen,
+        /// internal to the ast builder, do not use
         last_stat: NodeRef,
     },
     VarDecl {
@@ -121,11 +122,25 @@ pub enum Expr<S> {
     Integer(i64),
     Float(f64),
     String(S),
-    Var { name: S, assignment: bool },
-    Return { right: bool },
-    UnOp { op: UnOp },
-    BinOp { op: BinOp, len: u32 },
-    Block { len: RefLen, last_stat: NodeRef },
+    Var {
+        name: S,
+        assignment: bool,
+    },
+    Return {
+        right: bool,
+    },
+    UnOp {
+        op: UnOp,
+    },
+    BinOp {
+        op: BinOp,
+        len: u32,
+    },
+    Block {
+        len: RefLen,
+        /// internal to the ast builder, do not use
+        last_stat: NodeRef,
+    },
 }
 
 #[derive(Copy, Clone, Debug)]
