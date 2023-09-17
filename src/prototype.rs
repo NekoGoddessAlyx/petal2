@@ -38,8 +38,23 @@ impl Display for Prototype<'_> {
                     c: impl Into<usize>,
                 ) -> std::fmt::Result {
                     match constants.get(c.into()) {
-                        Some(constant) => write!(f, " [{:?}]", constant),
                         None => write!(f, " <invalid>"),
+                        Some(constant) => write!(f, " [{:?}]", constant),
+                    }
+                }
+
+                #[inline]
+                fn fmt_jump(
+                    f: &mut Formatter<'_>,
+                    i: usize,
+                    j: impl Into<i64>,
+                ) -> std::fmt::Result {
+                    match i
+                        .checked_add_signed(j.into() as isize)
+                        .and_then(|dest| dest.checked_add(1))
+                    {
+                        None => write!(f, " <invalid>"),
+                        Some(dest) => write!(f, " ({} -> {})", i, dest),
                     }
                 }
 
@@ -82,10 +97,12 @@ impl Display for Prototype<'_> {
                         | Instruction::SubCR { left, .. }
                         | Instruction::MulCR { left, .. }
                         | Instruction::DivCR { left, .. } => fmt_c(f, constants, left),
-                        // TODO: display jump
-                        Instruction::CJumpR { .. } => Ok(()),
-                        Instruction::CJumpC { constant, .. } => fmt_c(f, constants, constant),
-                        Instruction::Jump { .. } => Ok(()),
+                        Instruction::CJumpR { jump, .. } => fmt_jump(f, index, jump),
+                        Instruction::CJumpC { constant, jump } => {
+                            fmt_c(f, constants, constant)?;
+                            fmt_jump(f, index, jump)
+                        }
+                        Instruction::Jump { jump } => fmt_jump(f, index, jump),
                     }?;
 
                     writeln!(f)?;
