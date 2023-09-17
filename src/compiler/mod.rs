@@ -198,10 +198,10 @@ where
     struct SourceDisplay<'source, 'gc>(&'source Source<'source, PString<'gc>>, Duration);
     impl Display for SourceDisplay<'_, '_> {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            write!(f, "Lexing({:?})", self.1)?;
-            // writeln!(f, "Tokens: {:?}", self.0.tokens)?;
-            // writeln!(f, "Locations: {:?}", self.0.locations)?;
-            // write!(f, "Line Starts: {:?}", self.0.line_starts)?;
+            writeln!(f, "Lexing({:?})", self.1)?;
+            writeln!(f, "Tokens: {:?}", self.0.tokens)?;
+            writeln!(f, "Locations: {:?}", self.0.locations)?;
+            write!(f, "Line Starts: {:?}", self.0.line_starts)?;
             Ok(())
         }
     }
@@ -224,22 +224,22 @@ where
     struct AstDisplay<'compiler, 'gc>(&'compiler Ast<PString<'gc>>, Duration);
     impl Display for AstDisplay<'_, '_> {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            write!(f, "Parsing({:?})", self.1)?;
-            // writeln!(f, "Nodes: {:?}", self.0.nodes)?;
-            // writeln!(f, "Locations: {:?}", self.0.locations)?;
-            // writeln!(
-            //     f,
-            //     "Nodes (mem): {}",
-            //     std::mem::size_of_val(&self.0.nodes[..])
-            // )?;
-            //
-            // writeln!(f, "✨✨✨✨✨✨✨ Nodes (pretty) ✨✨✨✨✨✨✨")?;
-            // for (i, n) in self.0.nodes.iter().enumerate() {
-            //     writeln!(f, "{}: {:?}", i, n)?;
-            // }
-            // writeln!(f, "✨✨✨✨✨✨✨ -------------- ✨✨✨✨✨✨✨")?;
-            //
-            // write!(f, "Ast (pretty): {}", self.0)?;
+            writeln!(f, "Parsing({:?})", self.1)?;
+            writeln!(f, "Nodes: {:?}", self.0.nodes)?;
+            writeln!(f, "Locations: {:?}", self.0.locations)?;
+            writeln!(
+                f,
+                "Nodes (mem): {}",
+                std::mem::size_of_val(&self.0.nodes[..])
+            )?;
+
+            writeln!(f, "✨✨✨✨✨✨✨ Nodes (pretty) ✨✨✨✨✨✨✨")?;
+            for (i, n) in self.0.nodes.iter().enumerate() {
+                writeln!(f, "{}: {:?}", i, n)?;
+            }
+            writeln!(f, "✨✨✨✨✨✨✨ -------------- ✨✨✨✨✨✨✨")?;
+
+            write!(f, "Ast (pretty): {}", self.0)?;
             Ok(())
         }
     }
@@ -260,8 +260,8 @@ where
     struct Ast2Display<'compiler, 'gc>(&'compiler Ast2<PString<'gc>>, Duration);
     impl Display for Ast2Display<'_, '_> {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            write!(f, "Semantics Check({:?})", self.1)?;
-            // write!(f, "Bindings: {:?}", self.0.bindings)?;
+            writeln!(f, "Semantics Check({:?})", self.1)?;
+            write!(f, "Bindings: {:?}", self.0.bindings)?;
             Ok(())
         }
     }
@@ -272,31 +272,23 @@ where
 
     let (code_gen_result, code_gen_time) = timed(|| code_gen(mc, ast, strings));
     let function = match code_gen_result {
-        Ok(prototype) => prototype,
-        // TODO: split codegen error into two parts: an internal error and compiler message
-        Err(error) => match error {
-            CodeGenError::ExpectedNode
-            | CodeGenError::ExpectedRoot
-            | CodeGenError::ExpectedStat
-            | CodeGenError::ExpectedExpr
-            | CodeGenError::BadTransition
-            | CodeGenError::MissingBinding
-            | CodeGenError::MissingLocalRegister
-            | CodeGenError::InvalidJumpLabel
-            | CodeGenError::NegativeConditionalJump
-            | CodeGenError::JumpTooLarge => return Err(CompileError::CompilerError(error.into())),
-            CodeGenError::NoRegistersAvailable | CodeGenError::ConstantPoolFull => {
-                callback(&(error, MessageKind::Error), None);
-                return Err(CompileError::CompileFailed(num_errors));
+        Ok(function) => function,
+        Err(error) => {
+            return match error {
+                CodeGenError::CodeGenFailed(message) => {
+                    callback(&message, None);
+                    Err(CompileError::CompileFailed(num_errors))
+                }
+                error => Err(CompileError::CompilerError(error.into())),
             }
-        },
+        }
     };
 
     struct CodeGenDisplay<'compiler, 'gc>(&'compiler Prototype<'gc>, Duration);
     impl Display for CodeGenDisplay<'_, '_> {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            write!(f, "CodeGen({:?})", self.1)?;
-            // write!(f, "{}", self.0)?;
+            writeln!(f, "CodeGen({:?})", self.1)?;
+            write!(f, "{}", self.0)?;
             Ok(())
         }
     }

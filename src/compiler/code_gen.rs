@@ -1,5 +1,6 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::ops::{Neg, Not};
 use std::rc::Rc;
 
@@ -8,11 +9,12 @@ use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
 
 use crate::compiler::ast::{BinOp, NodeRef, RefLen, Root, UnOp};
+use crate::compiler::callback::Diagnostic;
 use crate::compiler::registers::{Register, Registers};
 use crate::instruction::{CIndex16, CIndex8, Instruction, RIndex};
 use crate::prototype::Prototype;
 use crate::value::Value;
-use crate::{PString, StringInterner};
+use crate::{MessageKind, PString, StringInterner};
 
 type Ast<'gc> = crate::compiler::sem_check::Ast2<PString<'gc>>;
 type Node<'gc> = crate::compiler::ast::Node<PString<'gc>>;
@@ -22,6 +24,8 @@ type Binding<'gc> = Rc<crate::compiler::sem_check::Binding<PString<'gc>>>;
 
 #[derive(Debug, Error)]
 pub enum CodeGenError {
+    #[error("{}", .0)]
+    CodeGenFailed(#[from] CodeGenMessage),
     #[error("Expected ast node")]
     ExpectedNode,
     #[error("Expected root ast node")]
@@ -40,12 +44,26 @@ pub enum CodeGenError {
     InvalidJumpLabel,
     #[error("Negative conditional jump")]
     NegativeConditionalJump,
+}
+
+#[derive(Debug, Error)]
+pub enum CodeGenMessage {
     #[error("Jump is too large")]
     JumpTooLarge,
     #[error("No registers are available. Your function is too large.")]
     NoRegistersAvailable,
     #[error("Constant pool is full. Your function is too large.")]
     ConstantPoolFull,
+}
+
+impl Diagnostic for CodeGenMessage {
+    fn kind(&self) -> MessageKind {
+        MessageKind::Error
+    }
+
+    fn message(&self) -> &dyn Display {
+        self
+    }
 }
 
 pub type Result<T> = std::result::Result<T, CodeGenError>;
@@ -351,7 +369,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
                 self.current_function
                     .registers
                     .allocate_any()
-                    .ok_or(CodeGenError::NoRegistersAvailable)?,
+                    .ok_or(CodeGenMessage::NoRegistersAvailable)?,
             ),
         })
     }
@@ -510,7 +528,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
                         Ok(())
                     }
                     Some(jump) if jump < 0 => Err(CodeGenError::NegativeConditionalJump),
-                    _ => Err(CodeGenError::JumpTooLarge),
+                    _ => Err(CodeGenMessage::JumpTooLarge.into()),
                 }
             }
             Instruction::Jump { jump: jmp } => {
@@ -521,7 +539,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
                         *jmp = jump as i16;
                         Ok(())
                     }
-                    _ => Err(CodeGenError::JumpTooLarge),
+                    _ => Err(CodeGenMessage::JumpTooLarge.into()),
                 }
             }
             _ => Err(CodeGenError::InvalidJumpLabel),
@@ -545,7 +563,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
                 let index = match index {
                     0..=MAX_8 => CIndex::Constant8(index as CIndex8),
                     MIN_16..=MAX_16 => CIndex::Constant16(index as CIndex16),
-                    _ => return Err(CodeGenError::ConstantPoolFull),
+                    _ => return Err(CodeGenMessage::ConstantPoolFull.into()),
                 };
                 self.current_function.constants.push(constant);
                 entry.insert(index);
@@ -611,7 +629,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
                     .current_function
                     .registers
                     .allocate_any()
-                    .ok_or(CodeGenError::NoRegistersAvailable)?;
+                    .ok_or(CodeGenMessage::NoRegistersAvailable)?;
                 self.current_function
                     .registers
                     .assign_local(local, register);
