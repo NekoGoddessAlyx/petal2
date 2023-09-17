@@ -152,6 +152,12 @@ enum State<'gc> {
     ExitBinaryExpr(BinOp, AnyExpr<'gc>, ExprDest),
     ContinueBlockExpr(RefLen),
     ExitBlockExpr(u16, ExprDest),
+
+    // skip
+    SkipStat,
+    SkipCompoundStat(RefLen),
+    SkipExpr,
+    ExitSkip,
 }
 
 impl<'gc> State<'gc> {
@@ -196,7 +202,7 @@ impl<'gc> State<'gc> {
             },
 
             State::ContinueCompoundStat(len) => match from {
-                Some(State::EnterStat) | Some(State::ExitStat) => {
+                Some(State::EnterStat) | Some(State::ExitStat) | Some(State::ExitSkip) => {
                     code_gen.continue_compound_statement(*len)
                 }
                 _ => fail_transfer!(),
@@ -303,6 +309,29 @@ impl<'gc> State<'gc> {
                 }
                 _ => fail_transfer!(),
             },
+
+            // skip
+            State::SkipStat => match from {
+                Some(State::ExitStat)
+                | Some(State::ExitIfStatCondition(..))
+                | Some(State::SkipCompoundStat(..)) => code_gen.skip_statement(),
+                _ => fail_transfer!(),
+            },
+            State::SkipCompoundStat(len) => match from {
+                Some(State::SkipStat) | Some(State::ExitSkip) => code_gen.skip_compound_stat(*len),
+                _ => fail_transfer!(),
+            },
+            State::SkipExpr => match from {
+                Some(State::SkipStat) => code_gen.skip_expr(),
+                _ => fail_transfer!(),
+            },
+            State::ExitSkip => match from {
+                Some(State::SkipStat)
+                | Some(State::SkipCompoundStat(..))
+                | Some(State::SkipExpr)
+                | Some(State::ExitSkip) => Ok(()),
+                _ => fail_transfer!(),
+            },
         }
     }
 }
@@ -407,8 +436,8 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     {
         let mut mapped: [Value<'gc>; N] = [Value::Null; N];
         for (i, v) in values.into_iter().enumerate() {
-            match v {
-                AnyExpr::Value(v) => mapped[i] = v,
+            match self.get_value(v) {
+                Some(v) => mapped[i] = v,
                 _ => return Ok(None),
             }
         }
@@ -419,6 +448,15 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
             }),
             Err(_) => None,
         })
+    }
+
+    fn get_value(&mut self, value: AnyExpr<'gc>) -> Option<Value<'gc>> {
+        match value {
+            AnyExpr::Protected(_) | AnyExpr::Temporary(_) => None,
+            AnyExpr::Constant8(c) => self.current_function.constants.get(c as usize).copied(),
+            AnyExpr::Constant16(c) => self.current_function.constants.get(c as usize).copied(),
+            AnyExpr::Value(v) => Some(v),
+        }
     }
 
     fn flatten_constant(
@@ -691,7 +729,32 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     }
 
     fn exit_if_stat_condition(&mut self, has_else: bool, condition: AnyExpr<'gc>) -> Result<()> {
-        // TODO: optimize based on condition
+        // if the condition can be known at compile-time,
+        // then the entire if statement can be optimized away
+        match self.get_value(condition) {
+            Some(v) => {
+                match (v.to_bool(), has_else) {
+                    (true, true) => {
+                        self.push_state(State::SkipStat);
+                        self.push_state(State::EnterStat);
+                    }
+                    (true, false) => {
+                        self.push_state(State::EnterStat);
+                    }
+                    (false, true) => {
+                        self.push_state(State::EnterStat);
+                        self.push_state(State::SkipStat);
+                    }
+                    (false, false) => {
+                        self.push_state(State::SkipStat);
+                    }
+                }
+
+                return Ok(());
+            }
+            _ => {}
+        }
+
         let dest = self.flatten_constant(condition, ExprDest::Anywhere)?;
         self.free_temp(dest);
 
@@ -1054,6 +1117,79 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
         }
 
         self.push_state(State::ExitExpr(dest.into()));
+
+        Ok(())
+    }
+
+    // skip
+
+    fn skip_statement(&mut self) -> Result<()> {
+        self.push_state(State::ExitSkip);
+
+        let statement = self.next_stat()?;
+        match *statement {
+            Stat::Compound { len, .. } => {
+                self.push_state(State::SkipCompoundStat(len));
+            }
+            Stat::VarDecl { def, .. } => {
+                if def {
+                    self.push_state(State::SkipExpr);
+                }
+            }
+            Stat::If { has_else } => {
+                if has_else {
+                    self.push_state(State::SkipStat);
+                }
+                self.push_state(State::SkipStat);
+                self.push_state(State::SkipExpr);
+            }
+            Stat::Expr => {
+                self.push_state(State::SkipExpr);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn skip_compound_stat(&mut self, len: RefLen) -> Result<()> {
+        if len > 0 {
+            self.push_state(State::SkipCompoundStat(len - 1));
+            self.push_state(State::SkipStat);
+        }
+
+        Ok(())
+    }
+
+    fn skip_expr(&mut self) -> Result<()> {
+        self.push_state(State::ExitSkip);
+
+        let expr = self.next_expr()?;
+        match *expr {
+            Expr::Null => {}
+            Expr::Bool(_) => {}
+            Expr::Integer(_) => {}
+            Expr::Float(_) => {}
+            Expr::String(_) => {}
+            Expr::Var { assignment, .. } => {
+                if assignment {
+                    self.push_state(State::SkipExpr);
+                }
+            }
+            Expr::Return { .. } => {
+                self.push_state(State::SkipExpr);
+            }
+            Expr::UnOp { .. } => {
+                self.push_state(State::SkipExpr);
+            }
+            Expr::BinOp { .. } => {
+                self.push_state(State::SkipExpr);
+                self.push_state(State::SkipExpr);
+            }
+            Expr::Block { len, .. } => {
+                self.push_state(State::SkipExpr);
+                self.push_state(State::SkipCompoundStat(len));
+            }
+        }
 
         Ok(())
     }
