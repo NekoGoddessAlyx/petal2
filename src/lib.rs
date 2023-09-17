@@ -11,6 +11,8 @@
     clippy::semicolon_if_nothing_returned
 )]
 
+use std::time::{Duration, Instant};
+
 pub use compiler::*;
 pub use interpreter::*;
 pub use string::*;
@@ -28,3 +30,12 @@ mod pretty_formatter;
 mod prototype;
 mod string;
 mod value;
+
+/// Temporary
+#[inline]
+pub fn timed<F: FnOnce() -> R, R>(f: F) -> (R, Duration) {
+    let start = Instant::now();
+    let result = f();
+    let duration = start.elapsed();
+    (result, duration)
+}

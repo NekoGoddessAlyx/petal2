@@ -1,11 +1,10 @@
 use std::fs::read_to_string;
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 use clap::{crate_authors, crate_description, crate_version, Arg, Command};
 use gc_arena::rootless_arena;
 
-use petal2::{compile, interpret};
+use petal2::{compile, interpret, timed};
 
 fn main() {
     let command = Command::new("petal")
@@ -50,10 +49,7 @@ fn compile_and_run<S: AsRef<[u8]>>(file_name: Option<&str>, source: S) {
     rootless_arena(|mc| {
         let (r, ct) = timed(|| compile(mc, |m| println!("{}", m), source));
         let function = match r {
-            Ok(prototype) => {
-                println!("Prototype: {}", prototype);
-                prototype
-            }
+            Ok(prototype) => prototype,
             Err(error) => {
                 println!("{}", error);
                 return;
@@ -72,12 +68,4 @@ fn compile_and_run<S: AsRef<[u8]>>(file_name: Option<&str>, source: S) {
             }
         }
     })
-}
-
-#[inline]
-fn timed<F: FnOnce() -> R, R>(f: F) -> (R, Duration) {
-    let start = Instant::now();
-    let result = f();
-    let duration = start.elapsed();
-    (result, duration)
 }

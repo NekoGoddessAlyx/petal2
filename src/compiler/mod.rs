@@ -1,18 +1,19 @@
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::from_utf8;
+use std::time::Duration;
 
 use gc_arena::Mutation;
 use thiserror::Error;
 
-use crate::compiler::ast::Node;
+use crate::compiler::ast::Ast;
 use crate::compiler::callback::Diagnostic;
 use crate::compiler::code_gen::{code_gen, CodeGenError};
 use crate::compiler::lexer::{lex, Source, Span};
 use crate::compiler::parser::{parse, ParserError};
-use crate::compiler::sem_check::{sem_check, SemCheckError};
+use crate::compiler::sem_check::{sem_check, Ast2, SemCheckError};
 use crate::prototype::Prototype;
-use crate::{PString, PStringInterner, StringInterner};
+use crate::{timed, PString, PStringInterner, StringInterner};
 
 mod ast;
 mod code_gen;
@@ -180,10 +181,7 @@ where
 {
     let mut num_errors = 0;
     let mut strings = PStringInterner::default();
-    let source = lex(source.as_ref(), |bytes| strings.intern(mc, bytes));
-    println!("Tokens: {:?}", source.tokens);
-    println!("Locations: {:?}", source.locations);
-    println!("Line Starts: {:?}", source.line_starts);
+    let (source, lex_time) = timed(|| lex(source.as_ref(), |bytes| strings.intern(mc, bytes)));
 
     let mut callback = |message: &dyn Diagnostic, at: Option<Span>| {
         match message.kind() {
@@ -197,32 +195,59 @@ where
         });
     };
 
-    let ast = match parse(
-        |message, at| callback(message, at),
-        &source.tokens,
-        &source.locations,
-        |bytes| strings.intern(mc, bytes),
-    ) {
+    struct SourceDisplay<'source, 'gc>(&'source Source<'source, PString<'gc>>, Duration);
+    impl Display for SourceDisplay<'_, '_> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "Lexing({:?})", self.1)?;
+            // writeln!(f, "Tokens: {:?}", self.0.tokens)?;
+            // writeln!(f, "Locations: {:?}", self.0.locations)?;
+            // write!(f, "Line Starts: {:?}", self.0.line_starts)?;
+            Ok(())
+        }
+    }
+    callback(&(SourceDisplay(&source, lex_time), MessageKind::Info), None);
+
+    let (parse_result, parse_time) = timed(|| {
+        parse(
+            |message, at| callback(message, at),
+            &source.tokens,
+            &source.locations,
+            |bytes| strings.intern(mc, bytes),
+        )
+    });
+    let ast = match parse_result {
         Ok(ast) => ast,
         Err(ParserError::FailedParse) => return Err(CompileError::CompileFailed(num_errors)),
         Err(error) => return Err((Box::new(error) as Box<dyn Error>).into()),
     };
-    println!("Nodes: {:?}", ast.nodes);
-    println!("Locations: {:?}", ast.locations);
-    println!(
-        "Nodes (mem): {}",
-        std::mem::size_of::<Node<PString>>() * ast.nodes.len()
-    );
 
-    println!("✨✨✨✨✨✨✨ Nodes (pretty) ✨✨✨✨✨✨✨");
-    for (i, n) in ast.nodes.iter().enumerate() {
-        println!("{}: {:?}", i, n);
+    struct AstDisplay<'compiler, 'gc>(&'compiler Ast<PString<'gc>>, Duration);
+    impl Display for AstDisplay<'_, '_> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "Parsing({:?})", self.1)?;
+            // writeln!(f, "Nodes: {:?}", self.0.nodes)?;
+            // writeln!(f, "Locations: {:?}", self.0.locations)?;
+            // writeln!(
+            //     f,
+            //     "Nodes (mem): {}",
+            //     std::mem::size_of_val(&self.0.nodes[..])
+            // )?;
+            //
+            // writeln!(f, "✨✨✨✨✨✨✨ Nodes (pretty) ✨✨✨✨✨✨✨")?;
+            // for (i, n) in self.0.nodes.iter().enumerate() {
+            //     writeln!(f, "{}: {:?}", i, n)?;
+            // }
+            // writeln!(f, "✨✨✨✨✨✨✨ -------------- ✨✨✨✨✨✨✨")?;
+            //
+            // write!(f, "Ast (pretty): {}", self.0)?;
+            Ok(())
+        }
     }
-    println!("✨✨✨✨✨✨✨ -------------- ✨✨✨✨✨✨✨");
+    callback(&(AstDisplay(&ast, parse_time), MessageKind::Info), None);
 
-    println!("Ast (pretty): {}", ast);
-
-    let ast = match sem_check(|message, at| callback(message, at), ast) {
+    let (sem_check_result, sem_check_time) =
+        timed(|| sem_check(|message, at| callback(message, at), ast));
+    let ast = match sem_check_result {
         Ok(ast) => ast,
         Err(error) => {
             return match error {
@@ -231,10 +256,23 @@ where
             };
         }
     };
-    println!("Bindings: {:?}", ast.bindings);
 
-    match code_gen(mc, ast, strings) {
-        Ok(prototype) => Ok(prototype),
+    struct Ast2Display<'compiler, 'gc>(&'compiler Ast2<PString<'gc>>, Duration);
+    impl Display for Ast2Display<'_, '_> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "Semantics Check({:?})", self.1)?;
+            // write!(f, "Bindings: {:?}", self.0.bindings)?;
+            Ok(())
+        }
+    }
+    callback(
+        &(Ast2Display(&ast, sem_check_time), MessageKind::Info),
+        None,
+    );
+
+    let (code_gen_result, code_gen_time) = timed(|| code_gen(mc, ast, strings));
+    let function = match code_gen_result {
+        Ok(prototype) => prototype,
         // TODO: split codegen error into two parts: an internal error and compiler message
         Err(error) => match error {
             CodeGenError::ExpectedNode
@@ -246,13 +284,28 @@ where
             | CodeGenError::MissingLocalRegister
             | CodeGenError::InvalidJumpLabel
             | CodeGenError::NegativeConditionalJump
-            | CodeGenError::JumpTooLarge => Err(CompileError::CompilerError(error.into())),
+            | CodeGenError::JumpTooLarge => return Err(CompileError::CompilerError(error.into())),
             CodeGenError::NoRegistersAvailable | CodeGenError::ConstantPoolFull => {
                 callback(&(error, MessageKind::Error), None);
-                Err(CompileError::CompileFailed(num_errors))
+                return Err(CompileError::CompileFailed(num_errors));
             }
         },
+    };
+
+    struct CodeGenDisplay<'compiler, 'gc>(&'compiler Prototype<'gc>, Duration);
+    impl Display for CodeGenDisplay<'_, '_> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "CodeGen({:?})", self.1)?;
+            // write!(f, "{}", self.0)?;
+            Ok(())
+        }
     }
+    callback(
+        &(CodeGenDisplay(&function, code_gen_time), MessageKind::Info),
+        None,
+    );
+
+    Ok(function)
 }
 
 #[rustfmt::skip]
