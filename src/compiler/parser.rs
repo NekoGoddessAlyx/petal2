@@ -1,7 +1,7 @@
 use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
 
-use crate::compiler::ast::{Ast, AstBuilder, BinOp, Mutability, NodeRef, Root, Stat, UnOp};
+use crate::compiler::ast::{Ast1, AstBuilder, BinOp, Mutability, NodeRef, Root, Stat, UnOp};
 use crate::compiler::ast::{Expr, RefLen};
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::{Span, Token};
@@ -22,7 +22,7 @@ pub fn parse<C: Callback, NS: NewString<S>, S: CompileString>(
     tokens: &[Token<S>],
     locations: &[Span],
     new_string: NS,
-) -> Result<Ast<S>, ParserError> {
+) -> Result<Ast1<S>, ParserError> {
     let mut parser = Parser {
         callback,
         new_string,

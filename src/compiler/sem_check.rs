@@ -7,7 +7,7 @@ use std::rc::Rc;
 use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
 
-use crate::compiler::ast::{Ast, Expr, Mutability, Node, NodeRef, RefLen, Root, Stat};
+use crate::compiler::ast::{Ast1, Ast2, Expr, Mutability, Node, NodeRef, RefLen, Root, Stat};
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::Span;
 use crate::compiler::string::CompileString;
@@ -70,12 +70,6 @@ pub enum SemCheckError {
 }
 
 #[derive(Debug)]
-pub struct Ast2<S> {
-    pub ast: Ast<S>,
-    pub bindings: HashMap<NodeRef, Rc<Binding<S>>>,
-}
-
-#[derive(Debug)]
 pub struct Binding<S> {
     pub mutability: Mutability,
     pub name: S,
@@ -88,13 +82,13 @@ pub struct Local(pub u32);
 
 type Result<T> = std::result::Result<T, SemCheckError>;
 
-pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast<S>) -> Result<Ast2<S>> {
+pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast1<S>) -> Result<Ast2<S>> {
     let mut sem_check = SemCheck {
         callback,
         had_error: false,
 
-        nodes: &ast.nodes,
-        locations: &ast.locations,
+        nodes: ast.nodes(),
+        locations: &ast.locations(),
         cursor: 0,
 
         state: smallvec![],
@@ -115,7 +109,7 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast<S>) -> Res
         true => Err(SemCheckError::FailedSemCheck),
         false => {
             let bindings = sem_check.bindings;
-            Ok(Ast2 { ast, bindings })
+            Ok(ast.to_semantics(bindings))
         }
     }
 }

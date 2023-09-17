@@ -16,7 +16,7 @@ use crate::prototype::Prototype;
 use crate::value::Value;
 use crate::{MessageKind, PString, StringInterner};
 
-type Ast<'gc> = crate::compiler::sem_check::Ast2<PString<'gc>>;
+type Ast<'gc> = crate::compiler::ast::Ast2<PString<'gc>>;
 type Node<'gc> = crate::compiler::ast::Node<PString<'gc>>;
 type Stat<'gc> = crate::compiler::ast::Stat<PString<'gc>>;
 type Expr<'gc> = crate::compiler::ast::Expr<PString<'gc>>;
@@ -84,9 +84,9 @@ pub fn code_gen<'gc, I: StringInterner<'gc, String = PString<'gc>>>(
 
     let mut code_gen = CodeGen {
         mc,
-        nodes: &ast.ast.nodes,
+        nodes: ast.nodes(),
         cursor: 0,
-        bindings: &ast.bindings,
+        bindings: ast.bindings(),
 
         strings,
 

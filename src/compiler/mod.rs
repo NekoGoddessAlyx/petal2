@@ -6,12 +6,12 @@ use std::time::Duration;
 use gc_arena::Mutation;
 use thiserror::Error;
 
-use crate::compiler::ast::Ast;
+use crate::compiler::ast::{Ast1, Ast2};
 use crate::compiler::callback::Diagnostic;
 use crate::compiler::code_gen::{code_gen, CodeGenError};
 use crate::compiler::lexer::{lex, Source, Span};
 use crate::compiler::parser::{parse, ParserError};
-use crate::compiler::sem_check::{sem_check, Ast2, SemCheckError};
+use crate::compiler::sem_check::{sem_check, SemCheckError};
 use crate::prototype::Prototype;
 use crate::{timed, PString, PStringInterner, StringInterner};
 
@@ -221,20 +221,16 @@ where
         Err(error) => return Err((Box::new(error) as Box<dyn Error>).into()),
     };
 
-    struct AstDisplay<'compiler, 'gc>(&'compiler Ast<PString<'gc>>, Duration);
+    struct AstDisplay<'compiler, 'gc>(&'compiler Ast1<PString<'gc>>, Duration);
     impl Display for AstDisplay<'_, '_> {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             writeln!(f, "Parsing({:?})", self.1)?;
-            writeln!(f, "Nodes: {:?}", self.0.nodes)?;
-            writeln!(f, "Locations: {:?}", self.0.locations)?;
-            writeln!(
-                f,
-                "Nodes (mem): {}",
-                std::mem::size_of_val(&self.0.nodes[..])
-            )?;
+            writeln!(f, "Nodes: {:?}", self.0.nodes())?;
+            writeln!(f, "Locations: {:?}", self.0.locations())?;
+            writeln!(f, "Nodes (mem): {}", std::mem::size_of_val(self.0.nodes()))?;
 
             writeln!(f, "✨✨✨✨✨✨✨ Nodes (pretty) ✨✨✨✨✨✨✨")?;
-            for (i, n) in self.0.nodes.iter().enumerate() {
+            for (i, n) in self.0.nodes().iter().enumerate() {
                 writeln!(f, "{}: {:?}", i, n)?;
             }
             writeln!(f, "✨✨✨✨✨✨✨ -------------- ✨✨✨✨✨✨✨")?;
@@ -261,7 +257,7 @@ where
     impl Display for Ast2Display<'_, '_> {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             writeln!(f, "Semantics Check({:?})", self.1)?;
-            write!(f, "Bindings: {:?}", self.0.bindings)?;
+            write!(f, "Bindings: {:?}", self.0.bindings())?;
             Ok(())
         }
     }

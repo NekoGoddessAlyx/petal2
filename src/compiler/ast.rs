@@ -1,22 +1,62 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::marker::PhantomData;
+use std::rc::Rc;
 
 use crate::compiler::ast::display::write_ast;
 use crate::compiler::lexer::Span;
+use crate::compiler::sem_check::Binding;
 use crate::compiler::string::CompileString;
+
+pub struct Unchecked;
+pub struct Semantics;
 
 // TODO: dedicated AstVisitor struct?
 #[derive(Debug)]
-pub struct Ast<S> {
-    pub nodes: Box<[Node<S>]>,
-    pub locations: Box<[Span]>,
+pub struct Ast<S, T> {
+    nodes: Vec<Node<S>>,
+    locations: Vec<Span>,
+    bindings: HashMap<NodeRef, Rc<Binding<S>>>,
+    state: PhantomData<T>,
 }
 
-impl<S: CompileString> Display for Ast<S> {
+impl<S: CompileString, T> Display for Ast<S, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write_ast(self, f)
     }
 }
+
+impl<S, T> Ast<S, T> {
+    pub fn nodes(&self) -> &[Node<S>] {
+        &self.nodes
+    }
+
+    pub fn locations(&self) -> &[Span] {
+        &self.locations
+    }
+}
+
+impl<S> Ast<S, Unchecked> {
+    #[must_use]
+    pub fn to_semantics(self, bindings: HashMap<NodeRef, Rc<Binding<S>>>) -> Ast<S, Semantics> {
+        Ast {
+            nodes: self.nodes,
+            locations: self.locations,
+            bindings,
+            state: PhantomData,
+        }
+    }
+}
+
+impl<S> Ast<S, Semantics> {
+    pub fn bindings(&self) -> &HashMap<NodeRef, Rc<Binding<S>>> {
+        &self.bindings
+    }
+}
+
+pub type Ast1<S> = Ast<S, Unchecked>;
+pub type Ast2<S> = Ast<S, Semantics>;
 
 #[derive(Debug)]
 pub enum Node<S> {
@@ -193,7 +233,7 @@ impl<S: CompileString> AstBuilder<S> {
         }
     }
 
-    pub fn build(self) -> Ast<S> {
+    pub fn build(self) -> Ast1<S> {
         assert!(!self.nodes.is_empty(), "Nodes is empty");
         assert!(!self.locations.is_empty(), "Locations is empty");
         assert_eq!(
@@ -202,9 +242,11 @@ impl<S: CompileString> AstBuilder<S> {
             "Mismatch between nodes and locations"
         );
 
-        Ast {
-            nodes: self.nodes.into_boxed_slice(),
-            locations: self.locations.into_boxed_slice(),
+        Ast1 {
+            nodes: self.nodes,
+            locations: self.locations,
+            bindings: HashMap::new(),
+            state: PhantomData,
         }
     }
 
@@ -479,7 +521,10 @@ mod display {
     use crate::compiler::string::CompileString;
     use crate::pretty_formatter::PrettyFormatter;
 
-    pub fn write_ast<S: CompileString>(ast: &Ast<S>, f: &mut Formatter<'_>) -> std::fmt::Result {
+    pub fn write_ast<S: CompileString, T>(
+        ast: &Ast<S, T>,
+        f: &mut Formatter<'_>,
+    ) -> std::fmt::Result {
         let mut pretty_formatter = AstPrettyPrinter {
             f: PrettyFormatter::new(f),
             nodes: ast.nodes.iter().peekable(),
