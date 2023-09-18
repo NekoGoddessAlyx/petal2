@@ -108,15 +108,16 @@ impl Span {
     }
 }
 
+// TODO: move somewhere else so it may be used in prototype
 #[derive(Copy, Clone, Debug)]
 pub struct LineNumber(NonZeroU32);
 
 impl LineNumber {
-    fn new(value: u32) -> Self {
+    pub fn new(value: u32) -> Self {
         Self(NonZeroU32::new(value).expect("Line numbers are 1-indexed"))
     }
     #[inline]
-    fn get(self) -> u32 {
+    pub fn get(self) -> u32 {
         self.0.get()
     }
 }

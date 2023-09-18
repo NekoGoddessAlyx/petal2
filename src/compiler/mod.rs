@@ -266,7 +266,11 @@ where
         None,
     );
 
-    let (code_gen_result, code_gen_time) = timed(|| code_gen(mc, ast, strings));
+    let (code_gen_result, code_gen_time) = timed(|| {
+        code_gen(mc, ast, strings, |span| {
+            *source.get_line_numbers(span).start()
+        })
+    });
     let function = match code_gen_result {
         Ok(function) => function,
         Err(error) => {

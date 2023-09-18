@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+use std::iter::zip;
 
 use gc_arena::Collect;
 
@@ -12,6 +13,7 @@ pub struct Prototype<'gc> {
     pub name: PString<'gc>,
     pub stack_size: u8,
     pub instructions: Box<[Instruction]>,
+    pub line_numbers: Box<[u32]>,
     pub constants: Box<[Value<'gc>]>,
 }
 
@@ -58,10 +60,34 @@ impl Display for Prototype<'_> {
                     }
                 }
 
+                // TODO: num_digits function/trait
+                let line_num_width = self
+                    .line_numbers
+                    .iter()
+                    .max()
+                    .map_or(1, |l| l.ilog10() as usize + 1);
+                let mut last_line_num = u32::MAX;
+
                 let constants = self.constants.as_ref();
-                let iter = self.instructions.iter().copied().enumerate();
-                for (index, instruction) in iter {
+                let iter = zip(
+                    self.line_numbers.iter().copied(),
+                    self.instructions.iter().copied(),
+                )
+                .enumerate();
+                for (index, (line_num, instruction)) in iter {
                     write!(f, "{:4?}", index)?;
+
+                    match line_num == last_line_num {
+                        true => {
+                            let line_num_width = line_num_width + 7;
+                            write!(f, " {:>line_num_width$}", "|")?;
+                        }
+                        false => {
+                            write!(f, " [line {:>line_num_width$}]", line_num)?;
+                        }
+                    }
+                    last_line_num = line_num;
+
                     write!(f, " {}", instruction)?;
 
                     match instruction {

@@ -9,6 +9,7 @@ use thiserror::Error;
 
 use crate::compiler::ast::{Ast2, Ast2Iterator, BinOp, NodeError, NodeRef, RefLen, Root, UnOp};
 use crate::compiler::callback::Diagnostic;
+use crate::compiler::lexer::{LineNumber, Span};
 use crate::compiler::registers::{Register, Registers};
 use crate::instruction::{CIndex16, CIndex8, Instruction, RIndex};
 use crate::prototype::Prototype;
@@ -58,16 +59,39 @@ impl Diagnostic for CodeGenMessage {
 
 pub type Result<T> = std::result::Result<T, CodeGenError>;
 
-pub fn code_gen<'gc, I: StringInterner<'gc, String = PString<'gc>>>(
+enum LastLineNumber {
+    Node(NodeRef),
+    LineNumber(LineNumber),
+}
+
+impl From<NodeRef> for LastLineNumber {
+    fn from(value: NodeRef) -> Self {
+        Self::Node(value)
+    }
+}
+
+impl From<LineNumber> for LastLineNumber {
+    fn from(value: LineNumber) -> Self {
+        Self::LineNumber(value)
+    }
+}
+
+pub fn code_gen<'gc, I, L>(
     mc: &Mutation<'gc>,
     ast: Ast2<PString<'gc>>,
     mut strings: I,
-) -> Result<Prototype<'gc>> {
+    get_line_number: L,
+) -> Result<Prototype<'gc>>
+where
+    I: StringInterner<'gc, String = PString<'gc>>,
+    L: Fn(Span) -> LineNumber,
+{
     let name = strings.intern(mc, b"test");
     let current_function = PrototypeBuilder {
         name,
         registers: Registers::new(),
         instructions: Vec::with_capacity(64),
+        line_numbers: Vec::with_capacity(64),
         constants_map: HashMap::with_capacity(32),
         constants: Vec::with_capacity(32),
     };
@@ -77,6 +101,8 @@ pub fn code_gen<'gc, I: StringInterner<'gc, String = PString<'gc>>>(
         ast: ast.iterator(),
 
         strings,
+        get_line_number,
+        last_line_number: LastLineNumber::LineNumber(LineNumber::new(1)),
 
         state: smallvec![],
 
@@ -97,6 +123,7 @@ struct PrototypeBuilder<'gc> {
     instructions: Vec<Instruction>,
     constants_map: HashMap<Value<'gc>, CIndex>,
     constants: Vec<Value<'gc>>,
+    line_numbers: Vec<u32>,
 }
 
 impl<'gc> PrototypeBuilder<'gc> {
@@ -105,6 +132,7 @@ impl<'gc> PrototypeBuilder<'gc> {
             name: self.name,
             stack_size: self.registers.stack_size().saturating_sub(1) as u8,
             instructions: self.instructions.into_boxed_slice(),
+            line_numbers: self.line_numbers.into_boxed_slice(),
             constants: self.constants.into_boxed_slice(),
         }
     }
@@ -149,11 +177,15 @@ enum State<'gc> {
 }
 
 impl<'gc> State<'gc> {
-    fn enter<I: StringInterner<'gc, String = PString<'gc>>>(
+    fn enter<I, L>(
         &mut self,
         from: Option<State<'gc>>,
-        code_gen: &mut CodeGen<'gc, '_, I>,
-    ) -> Result<()> {
+        code_gen: &mut CodeGen<'gc, '_, I, L>,
+    ) -> Result<()>
+    where
+        I: StringInterner<'gc, String = PString<'gc>>,
+        L: Fn(Span) -> LineNumber,
+    {
         macro_rules! fail_transfer {
             () => {{
                 dbg!(&from);
@@ -324,20 +356,45 @@ impl<'gc> State<'gc> {
     }
 }
 
-struct CodeGen<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> {
+struct CodeGen<'gc, 'ast, I, L> {
     mc: &'ast Mutation<'gc>,
     ast: Ast2Iterator<'ast, PString<'gc>>,
 
     // TODO: remove allow when needed
     #[allow(dead_code)]
     strings: I,
+    get_line_number: L,
+    last_line_number: LastLineNumber,
 
     state: SmallVec<[State<'gc>; 32]>,
 
     current_function: PrototypeBuilder<'gc>,
 }
 
-impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast, I> {
+impl<'gc, 'ast, I, L> CodeGen<'gc, 'ast, I, L>
+where
+    I: StringInterner<'gc, String = PString<'gc>>,
+    L: Fn(Span) -> LineNumber,
+{
+    fn set_last_line_number<S: Into<LastLineNumber>>(&mut self, line_number: S) {
+        self.last_line_number = line_number.into();
+    }
+
+    fn last_line_number(&mut self) -> LineNumber {
+        match self.last_line_number {
+            LastLineNumber::Node(n) => {
+                let line_number = self
+                    .ast
+                    .location_of(n)
+                    .map(|span| (self.get_line_number)(span))
+                    .unwrap_or(LineNumber::new(1));
+                self.set_last_line_number(line_number);
+                line_number
+            }
+            LastLineNumber::LineNumber(l) => l,
+        }
+    }
+
     fn push_state(&mut self, state: State<'gc>) {
         self.state.push(state);
     }
@@ -504,6 +561,8 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     fn push_instruction(&mut self, instruction: Instruction) -> Label {
         let label = self.current_function.instructions.len();
         self.current_function.instructions.push(instruction);
+        let line_number = self.last_line_number().get();
+        self.current_function.line_numbers.push(line_number);
         label as Label
     }
 
@@ -603,6 +662,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
 
     fn enter_statement(&mut self) -> Result<()> {
         let statement = self.ast.next_stat()?;
+        self.set_last_line_number(self.ast.previous_node());
         match *statement {
             Stat::Compound { len, .. } => {
                 let stack_top = self.current_function.registers.stack_top();
@@ -759,6 +819,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     fn enter_expression_anywhere(&mut self) -> Result<()> {
         let expr = self.ast.next_expr()?;
         let node = self.ast.previous_node();
+        self.set_last_line_number(node);
         self.consume_expr_anywhere(node, expr)
     }
 
@@ -830,6 +891,7 @@ impl<'gc, 'ast, I: StringInterner<'gc, String = PString<'gc>>> CodeGen<'gc, 'ast
     fn enter_expression(&mut self, dest: ExprDest) -> Result<()> {
         let expr = self.ast.next_expr()?;
         let node = self.ast.previous_node();
+        self.set_last_line_number(node);
         self.consume_expr(node, expr, dest)
     }
 
