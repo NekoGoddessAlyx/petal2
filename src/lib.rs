@@ -39,3 +39,21 @@ pub fn timed<F: FnOnce() -> R, R>(f: F) -> (R, Duration) {
     let duration = start.elapsed();
     (result, duration)
 }
+
+trait NumDigits {
+    fn num_digits(self) -> usize;
+}
+
+macro_rules! impl_num_digits {
+    ($($t: ty),* $(,)?) => {
+        $(
+            impl NumDigits for $t {
+                fn num_digits(self) -> usize {
+                    self.ilog10() as usize + 1
+                }
+            }
+        )*
+    };
+}
+
+impl_num_digits!(u8, i8, u16, i16, u32, i32, u64, i64, usize, isize,);

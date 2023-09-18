@@ -13,7 +13,7 @@ use crate::compiler::lexer::{lex, Source, Span};
 use crate::compiler::parser::{parse, ParserError};
 use crate::compiler::sem_check::{sem_check, SemCheckError};
 use crate::prototype::Prototype;
-use crate::{timed, PString, PStringInterner, StringInterner};
+use crate::{timed, NumDigits, PString, PStringInterner, StringInterner};
 
 mod ast;
 mod code_gen;
@@ -108,10 +108,9 @@ impl<S> Display for CompilerMessage<'_, S> {
                         .map(|preceding| preceding.trim_start().len())
                         .unwrap_or(0);
 
-                    // ilog10() + 1 is the number of digits in line_number
                     // magic number 6: the number of characters in "[line ]",
                     // excluding the ']' because that's getting replaced with '|'
-                    let indent = line_number.ilog10() as usize + 1 + 6;
+                    let indent = line_number.num_digits() + 6;
 
                     write!(f, "[line {}] {}", line_number, source_line)?;
 

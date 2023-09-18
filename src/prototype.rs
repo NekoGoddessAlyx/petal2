@@ -5,7 +5,7 @@ use gc_arena::Collect;
 
 use crate::instruction::Instruction;
 use crate::value::Value;
-use crate::PString;
+use crate::{NumDigits, PString};
 
 #[derive(Debug, Collect)]
 #[collect(no_drop)]
@@ -60,12 +60,7 @@ impl Display for Prototype<'_> {
                     }
                 }
 
-                // TODO: num_digits function/trait
-                let line_num_width = self
-                    .line_numbers
-                    .iter()
-                    .max()
-                    .map_or(1, |l| l.ilog10() as usize + 1);
+                let line_num_width = self.line_numbers.iter().max().map_or(1, |l| l.num_digits());
                 let mut last_line_num = u32::MAX;
 
                 let constants = self.constants.as_ref();
