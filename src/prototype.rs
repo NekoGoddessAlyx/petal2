@@ -111,8 +111,8 @@ impl Display for Prototype<'_> {
                         | Instruction::SubCC { left, right, .. }
                         | Instruction::MulCC { left, right, .. }
                         | Instruction::DivCC { left, right, .. } => {
-                            fmt_c(f, constants, right)?;
-                            fmt_c(f, constants, left)
+                            fmt_c(f, constants, left)?;
+                            fmt_c(f, constants, right)
                         }
                         Instruction::AddCR { left, .. }
                         | Instruction::SubCR { left, .. }
