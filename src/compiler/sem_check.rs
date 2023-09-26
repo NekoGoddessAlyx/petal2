@@ -1,4 +1,5 @@
 use std::borrow::Borrow;
+use std::cell::Cell;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
@@ -10,6 +11,7 @@ use thiserror::Error;
 
 use crate::compiler::ast::{
     Ast1, Ast1Iterator, Ast2, BinOp, Expr, Mutability, NodeError, NodeRef, RefLen, Root, Stat,
+    TypeSpec,
 };
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::Span;
@@ -23,6 +25,7 @@ pub enum SemCheckMsg<S> {
     CannotAssignToVal(S),
 
     VariableNotFound(S),
+    VariableNotInitialized(S),
 
     TypeError(TypeError<S>),
 }
@@ -39,6 +42,9 @@ impl<S: CompileString> Display for SemCheckMsg<S> {
 
             SemCheckMsg::VariableNotFound(name) => {
                 write!(f, "Variable '{}' not found", name)
+            }
+            SemCheckMsg::VariableNotInitialized(name) => {
+                write!(f, "Variable '{}' is not initialized", name)
             }
 
             SemCheckMsg::TypeError(type_error) => {
@@ -81,7 +87,8 @@ pub struct Binding<S> {
     pub mutability: Mutability,
     pub name: S,
     pub index: Local,
-    pub ty: Type<S>,
+    ty: Type<S>,
+    initialized: Cell<bool>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -209,6 +216,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         mutability: Mutability,
         name: S,
         ty: Type<S>,
+        initialized: bool,
     ) -> Result<Rc<Binding<S>>> {
         let context = self.get_context_mut()?;
         let scope = context
@@ -234,6 +242,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                     name,
                     index: local,
                     ty,
+                    initialized: Cell::new(initialized),
                 });
 
                 entry.insert(binding.clone());
@@ -344,6 +353,22 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                                 }
 
                                 self.bindings.insert(node, binding.clone());
+
+                                if !binding.initialized.get() {
+                                    match assignment {
+                                        true => {
+                                            binding.initialized.set(true);
+                                        }
+                                        false => {
+                                            self.on_error(
+                                                &SemCheckMsg::VariableNotInitialized(
+                                                    binding.name.clone(),
+                                                ),
+                                                self.ast.location_of(node),
+                                            );
+                                        }
+                                    }
+                                }
 
                                 binding.ty.clone()
                             }
@@ -465,19 +490,34 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                     self.end_scope()?;
                 }
                 State::DeclareVar(node) => {
-                    let b = if let Some(State::ExitExpr(ty)) = previous {
-                        ty
+                    let mut b = if let Some(State::ExitExpr(ty)) = previous {
+                        Some(ty)
                     } else {
-                        Type::Dynamic(true)
+                        None
+                    };
+
+                    let ty = match self.ast.get_stat_at(node)? {
+                        Stat::VarDecl { ty, .. } => match ty {
+                            TypeSpec::None => Type::Dynamic(false),
+                            TypeSpec::Nullable => {
+                                b = Some(Type::Null);
+                                Type::Dynamic(true)
+                            }
+                        },
+                        _ => return Err(SemCheckError::NodeError(NodeError::ExpectedStat)),
                     };
                     // let ty = self.next_type();
                     // let ty = Type::Dynamic(true);
-                    let ty = Type::Dynamic(false);
-                    match unify(ty.clone(), b, &mut self.substitutions) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            self.on_error(&SemCheckMsg::TypeError(e), None);
-                            // todo
+                    // let ty = Type::Dynamic(false);
+
+                    let is_initialized = b.is_some();
+                    if let Some(b) = b {
+                        match unify(ty.clone(), b, &mut self.substitutions) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                self.on_error(&SemCheckMsg::TypeError(e), None);
+                                // todo
+                            }
                         }
                     }
                     let ty = ty.substitute(&self.substitutions);
@@ -486,7 +526,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                         Stat::VarDecl {
                             mutability, name, ..
                         } => {
-                            self.declare(node, *mutability, name.clone(), ty)?;
+                            self.declare(node, *mutability, name.clone(), ty, is_initialized)?;
                         }
                         _ => return Err(SemCheckError::NodeError(NodeError::ExpectedStat)),
                     }

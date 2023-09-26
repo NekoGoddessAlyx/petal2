@@ -1,7 +1,9 @@
 use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
 
-use crate::compiler::ast::{Ast1, AstBuilder, BinOp, Mutability, NodeRef, Root, Stat, UnOp};
+use crate::compiler::ast::{
+    Ast1, AstBuilder, BinOp, Mutability, NodeRef, Root, Stat, TypeSpec, UnOp,
+};
 use crate::compiler::ast::{Expr, RefLen};
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::{Span, Token};
@@ -620,11 +622,20 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             }
         };
 
+        let ty = match self.peek() {
+            Token::Quest => {
+                self.advance();
+                TypeSpec::Nullable
+            }
+            _ => TypeSpec::None,
+        };
+
         let var_decl = self.push_statement(
             push_stat,
             Stat::VarDecl {
                 mutability,
                 name,
+                ty,
                 def: false,
             },
             var_location,

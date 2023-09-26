@@ -67,6 +67,8 @@ pub enum Token<S> {
 
     Bang,
 
+    Quest,
+
     Add,
     Sub,
     Mul,
@@ -347,6 +349,10 @@ where
             Some(b'!') => {
                 self.advance(1);
                 self.push_token(Token::Bang);
+            }
+            Some(b'?') => {
+                self.advance(1);
+                self.push_token(Token::Quest);
             }
             Some(b'+') => {
                 self.advance(1);

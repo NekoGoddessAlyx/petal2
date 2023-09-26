@@ -128,6 +128,7 @@ pub enum Stat<S> {
     VarDecl {
         mutability: Mutability,
         name: S,
+        ty: TypeSpec,
         def: bool,
     },
     If {
@@ -140,6 +141,12 @@ pub enum Stat<S> {
 pub enum Mutability {
     Immutable,
     Mutable,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum TypeSpec {
+    None,
+    Nullable,
 }
 
 #[derive(Debug)]
@@ -704,7 +711,7 @@ mod display {
     use thiserror::Error;
 
     use crate::compiler::ast::{
-        AstIterator, BinOp, Expr, Mutability, NodeError, RefLen, Root, Stat, UnOp,
+        AstIterator, BinOp, Expr, Mutability, NodeError, RefLen, Root, Stat, TypeSpec, UnOp,
     };
     use crate::compiler::string::CompileString;
     use crate::pretty_formatter::PrettyFormatter;
@@ -848,12 +855,18 @@ mod display {
                             Stat::VarDecl {
                                 mutability,
                                 ref name,
+                                ty,
                                 def,
                             } => {
                                 match mutability {
                                     Mutability::Immutable => write!(self, "val {}", name)?,
                                     Mutability::Mutable => write!(self, "var {}", name)?,
                                 };
+                                match ty {
+                                    TypeSpec::None => {}
+                                    TypeSpec::Nullable => write!(self, "?")?,
+                                };
+
                                 if def {
                                     write!(self, " = ")?;
                                     self.push_state(State::EnterExpr);
