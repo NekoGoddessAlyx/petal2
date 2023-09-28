@@ -802,6 +802,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                             Expr::UnOp { op: UnOp::Neg },
                             op_location,
                         );
+                        self.push_state(State::BeginExpressionInfix { precedence, left });
                         self.push_state(State::BeginExpression {
                             push_expr: PushExpr::UnOpExprRight(left),
                             precedence: Precedence::Prefix,
@@ -815,6 +816,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
                 let left =
                     self.push_expression(push_expr, Expr::UnOp { op: UnOp::Not }, op_location);
+                self.push_state(State::BeginExpressionInfix { precedence, left });
                 self.push_state(State::BeginExpression {
                     push_expr: PushExpr::UnOpExprRight(left),
                     precedence: Precedence::Prefix,
