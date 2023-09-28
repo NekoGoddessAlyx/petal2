@@ -170,6 +170,7 @@ struct SemCheck<'ast, C, S> {
     contexts: SmallVec<[Context<S>; 16]>,
     bindings: HashMap<NodeRef, Rc<Binding<S>>>,
 
+    #[allow(unused)]
     next_type: u32,
     substitutions: HashMap<TypeVariable, Type<S>>,
 }
@@ -266,6 +267,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         None
     }
 
+    #[allow(unused)]
     fn next_type(&mut self) -> Type<S> {
         let index = self.next_type;
         self.next_type += 1;
@@ -393,15 +395,13 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                             }
                         }
                     }
-                    Expr::Return { right } => match right {
-                        true => {
+                    Expr::Return { right } => {
+                        let ty = Type::Never;
+                        self.push_state(State::ExitExpr(ty));
+                        if right {
                             self.push_state(State::EnterExpr);
                         }
-                        false => {
-                            let ty = Type::Null;
-                            self.push_state(State::ExitExpr(ty));
-                        }
-                    },
+                    }
                     Expr::UnOp { .. } => {
                         self.push_state(State::EnterExpr);
                     }
@@ -439,48 +439,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                 },
                 State::ExitBinExpr(op, ref left_ty) => match previous {
                     Some(State::ExitExpr(ref right_ty)) => {
-                        // todo extract into function
-                        let ty = match op {
-                            BinOp::Add => match (left_ty, right_ty) {
-                                (Type::Dynamic(_), _) => left_ty.clone(),
-                                (_, Type::Dynamic(_)) => right_ty.clone(),
-                                (Type::Integer(_), Type::Integer(_)) => left_ty.clone(),
-                                (Type::Integer(_), Type::Float(_)) => right_ty.clone(),
-                                (Type::Float(_), Type::Integer(_))
-                                | (Type::Float(_), Type::Float(_)) => left_ty.clone(),
-                                (Type::String(_), _) => left_ty.clone(),
-                                (_, Type::String(_)) => right_ty.clone(),
-                                (_, _) => {
-                                    self.on_error(
-                                        &SemCheckMsg::TypeError(TypeError::CannotAdd(
-                                            left_ty.clone(),
-                                            right_ty.clone(),
-                                        )),
-                                        None,
-                                    ); // todo
-                                    Type::Dynamic(true)
-                                }
-                            },
-                            BinOp::Sub | BinOp::Mul | BinOp::Div => match (left_ty, right_ty) {
-                                (Type::Dynamic(_), _) => left_ty.clone(),
-                                (_, Type::Dynamic(_)) => right_ty.clone(),
-                                (Type::Integer(_), Type::Integer(_)) => left_ty.clone(),
-                                (Type::Integer(_), Type::Float(_)) => right_ty.clone(),
-                                (Type::Float(_), Type::Integer(_))
-                                | (Type::Float(_), Type::Float(_)) => left_ty.clone(),
-                                (_, _) => {
-                                    self.on_error(
-                                        &SemCheckMsg::TypeError(TypeError::CannotBinOp(
-                                            left_ty.clone(),
-                                            right_ty.clone(),
-                                        )),
-                                        None,
-                                    ); // todo
-                                    Type::Dynamic(true)
-                                }
-                            },
-                        };
-
+                        let ty = self.bin_op_type(op, left_ty, right_ty);
                         self.push_state(State::ExitExpr(ty));
                     }
                     _ => todo!("state error"),
@@ -537,6 +496,48 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
 
         Ok(())
     }
+
+    fn bin_op_type(&mut self, op: BinOp, left_ty: &Type<S>, right_ty: &Type<S>) -> Type<S> {
+        match op {
+            BinOp::Add => match (left_ty, right_ty) {
+                (Type::Dynamic(n), _) | (_, Type::Dynamic(n)) => Type::Dynamic(*n),
+                (Type::Never, _) | (_, Type::Never) => Type::Never,
+                (Type::Integer(false), Type::Integer(false)) => Type::Integer(false),
+                (Type::Integer(false), Type::Float(false))
+                | (Type::Float(false), Type::Integer(false))
+                | (Type::Float(false), Type::Float(false)) => Type::Float(false),
+                (Type::String(false), _) | (_, Type::String(false)) => Type::String(false),
+                (_, _) => {
+                    self.on_error(
+                        &SemCheckMsg::TypeError(TypeError::CannotAdd(
+                            left_ty.clone(),
+                            right_ty.clone(),
+                        )),
+                        None,
+                    ); // todo
+                    Type::Dynamic(true)
+                }
+            },
+            BinOp::Sub | BinOp::Mul | BinOp::Div => match (left_ty, right_ty) {
+                (Type::Dynamic(n), _) | (_, Type::Dynamic(n)) => Type::Dynamic(*n),
+                (Type::Never, _) | (_, Type::Never) => Type::Never,
+                (Type::Integer(false), Type::Integer(false)) => Type::Integer(false),
+                (Type::Integer(false), Type::Float(false))
+                | (Type::Float(false), Type::Integer(false))
+                | (Type::Float(false), Type::Float(false)) => Type::Float(false),
+                (_, _) => {
+                    self.on_error(
+                        &SemCheckMsg::TypeError(TypeError::CannotBinOp(
+                            left_ty.clone(),
+                            right_ty.clone(),
+                        )),
+                        None,
+                    ); // todo
+                    Type::Dynamic(true)
+                }
+            },
+        }
+    }
 }
 
 struct Context<S> {
@@ -558,26 +559,29 @@ impl<S: CompileString> Scope<S> {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Type<S> {
-    Null,
     Dynamic(bool),
+    Never,
+    Null,
     Boolean(bool),
     Integer(bool),
     Float(bool),
     String(bool),
     #[allow(unused)]
     NewType(Rc<NewType<S>>),
+    #[allow(unused)]
     Variable(TypeVariable),
 }
 
 impl<S: CompileString> Type<S> {
     fn substitute(&self, substitutions: &HashMap<TypeVariable, Type<S>>) -> Type<S> {
         match self {
+            Type::Dynamic(n) => Type::Dynamic(*n),
+            Type::Never => Type::Never,
             Type::Null => Type::Null,
-            Type::Dynamic(nullable) => Type::Dynamic(*nullable),
-            Type::Boolean(nullable) => Type::Boolean(*nullable),
-            Type::Integer(nullable) => Type::Integer(*nullable),
-            Type::Float(nullable) => Type::Float(*nullable),
-            Type::String(nullable) => Type::String(*nullable),
+            Type::Boolean(n) => Type::Boolean(*n),
+            Type::Integer(n) => Type::Integer(*n),
+            Type::Float(n) => Type::Float(*n),
+            Type::String(n) => Type::String(*n),
             Type::NewType(ty) => Type::NewType(Rc::new(NewType {
                 name: ty.name.clone(),
                 generics: ty
@@ -610,9 +614,13 @@ impl TypeVariable {
         substitutions: &HashMap<TypeVariable, Type<S>>,
     ) -> bool {
         match ty {
-            Type::Null => false,
-            Type::Dynamic(_) => false,
-            Type::Boolean(_) | Type::Integer(_) | Type::Float(_) | Type::String(_) => false,
+            Type::Dynamic(_)
+            | Type::Never
+            | Type::Null
+            | Type::Boolean(_)
+            | Type::Integer(_)
+            | Type::Float(_)
+            | Type::String(_) => false,
             Type::NewType(ty) => {
                 for generic in &ty.generics {
                     if self.occurs_in(generic.clone(), substitutions) {
@@ -653,6 +661,7 @@ fn unify<S: CompileString>(
         (
             Type::Dynamic(false),
             Type::Dynamic(true)
+            | Type::Null
             | Type::Boolean(true)
             | Type::Integer(true)
             | Type::Float(true)
@@ -706,6 +715,7 @@ fn unify<S: CompileString>(
 
             Ok(())
         }
+        (_, Type::Never) => Ok(()),
         (_, _) => Err(TypeError::TypeNotEqual(left, right)),
     }
 }
