@@ -745,28 +745,25 @@ where
     fn exit_if_stat_condition(&mut self, has_else: bool, condition: AnyExpr<'gc>) -> Result<()> {
         // if the condition can be known at compile-time,
         // then the entire if statement can be optimized away
-        match self.get_value(condition) {
-            Some(v) => {
-                match (v.to_bool(), has_else) {
-                    (true, true) => {
-                        self.push_state(State::SkipStat);
-                        self.push_state(State::EnterStat);
-                    }
-                    (true, false) => {
-                        self.push_state(State::EnterStat);
-                    }
-                    (false, true) => {
-                        self.push_state(State::EnterStat);
-                        self.push_state(State::SkipStat);
-                    }
-                    (false, false) => {
-                        self.push_state(State::SkipStat);
-                    }
+        if let Some(v) = self.get_value(condition) {
+            match (v.to_bool(), has_else) {
+                (true, true) => {
+                    self.push_state(State::SkipStat);
+                    self.push_state(State::EnterStat);
                 }
-
-                return Ok(());
+                (true, false) => {
+                    self.push_state(State::EnterStat);
+                }
+                (false, true) => {
+                    self.push_state(State::EnterStat);
+                    self.push_state(State::SkipStat);
+                }
+                (false, false) => {
+                    self.push_state(State::SkipStat);
+                }
             }
-            _ => {}
+
+            return Ok(());
         }
 
         let dest = self.flatten_constant(condition, ExprDest::Anywhere)?;
@@ -1591,10 +1588,7 @@ impl Instruction {
                     jump,
                 }
             }
-            RegisterOrConstant8::Constant8(c) => Instruction::CJumpC {
-                constant: c.into(),
-                jump,
-            },
+            RegisterOrConstant8::Constant8(c) => Instruction::CJumpC { constant: c, jump },
         }
     }
 }
