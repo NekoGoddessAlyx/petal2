@@ -183,12 +183,12 @@ pub fn interpret<'gc>(
 
                 Instruction::CJumpR { register, jump } => {
                     if !peek!(register).to_bool() {
-                        jump!(jump)
+                        jump!(jump);
                     }
                 }
                 Instruction::CJumpC { constant, jump } => {
                     if !constant!(constant).to_bool() {
-                        jump!(jump)
+                        jump!(jump);
                     }
                 }
                 Instruction::Jump { jump } => jump!(jump),
