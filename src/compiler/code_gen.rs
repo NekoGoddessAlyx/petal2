@@ -954,16 +954,11 @@ where
                 true => {
                     self.push_state(State::ExitReturnExpr(dest));
                     self.push_state(State::EnterExprAnywhere);
+
                     Ok(())
                 }
                 false => {
-                    let right = self.allocate(ExprDest::Anywhere)?;
-                    let constant = self.push_constant(Value::Integer(0))?;
-                    self.push_instruction(Instruction::LoadC {
-                        destination: right.into(),
-                        constant: constant.into(),
-                    });
-                    self.exit_return_expression(right.into(), dest)?;
+                    self.exit_return_expression(Value::Null.into(), dest)?;
 
                     Ok(())
                 }
