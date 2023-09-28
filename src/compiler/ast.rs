@@ -26,13 +26,23 @@ pub struct Ast<S, T> {
 
 impl<S: CompileString> Display for Ast1<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write_ast(self.iterator(), f)
+        let bindings = Bindings::new();
+        write_ast(
+            Ast2Iterator {
+                nodes: &self.nodes,
+                locations: &self.locations,
+                bindings: &bindings,
+                cursor: 0,
+            },
+            false,
+            f,
+        )
     }
 }
 
 impl<S: CompileString> Display for Ast2<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write_ast(self.iterator(), f)
+        write_ast(self.iterator(), true, f)
     }
 }
 
@@ -46,9 +56,9 @@ impl<S, T> Ast<S, T> {
     }
 }
 
-impl<S> Ast<S, Unchecked> {
+impl<S> Ast1<S> {
     #[must_use]
-    pub fn into_semantics(self, bindings: Bindings<S>) -> Ast<S, Semantics> {
+    pub fn into_semantics(self, bindings: Bindings<S>) -> Ast2<S> {
         Ast {
             nodes: self.nodes,
             locations: self.locations,
@@ -67,7 +77,7 @@ impl<S> Ast<S, Unchecked> {
     }
 }
 
-impl<S> Ast<S, Semantics> {
+impl<S> Ast2<S> {
     pub fn bindings(&self) -> &Bindings<S> {
         &self.bindings
     }
@@ -711,18 +721,20 @@ mod display {
     use thiserror::Error;
 
     use crate::compiler::ast::{
-        AstIterator, BinOp, Expr, Mutability, NodeError, RefLen, Root, Stat, TypeSpec, UnOp,
+        Ast2Iterator, BinOp, Expr, Mutability, NodeError, RefLen, Root, Stat, TypeSpec, UnOp,
     };
     use crate::compiler::string::CompileString;
     use crate::pretty_formatter::PrettyFormatter;
 
-    pub fn write_ast<S: CompileString, B>(
-        ast: AstIterator<S, B>,
+    pub fn write_ast<S: CompileString>(
+        ast: Ast2Iterator<S>,
+        has_semantics: bool,
         f: &mut Formatter<'_>,
     ) -> std::fmt::Result {
         let mut pretty_formatter = AstPrettyPrinter {
             f: PrettyFormatter::new(f),
             ast,
+            has_semantics,
             state: smallvec![],
         };
         pretty_formatter.push_state(State::EnterRoot);
@@ -775,19 +787,20 @@ mod display {
         WriteErr(#[from] Error),
     }
 
-    pub struct AstPrettyPrinter<'formatter, 'ast, W, S, B> {
+    pub struct AstPrettyPrinter<'formatter, 'ast, W, S> {
         f: PrettyFormatter<'formatter, W>,
-        ast: AstIterator<'ast, S, B>,
+        ast: Ast2Iterator<'ast, S>,
+        has_semantics: bool,
         state: SmallVec<[State; 16]>,
     }
 
-    impl<W: Write, S, B> Write for AstPrettyPrinter<'_, '_, W, S, B> {
+    impl<W: Write, S> Write for AstPrettyPrinter<'_, '_, W, S> {
         fn write_str(&mut self, s: &str) -> std::fmt::Result {
             self.f.write_str(s)
         }
     }
 
-    impl<'formatter, 'ast, W, S, B> AstPrettyPrinter<'formatter, 'ast, W, S, B>
+    impl<'formatter, 'ast, W, S> AstPrettyPrinter<'formatter, 'ast, W, S>
     where
         W: Write,
         S: CompileString,
@@ -862,10 +875,21 @@ mod display {
                                     Mutability::Immutable => write!(self, "val {}", name)?,
                                     Mutability::Mutable => write!(self, "var {}", name)?,
                                 };
-                                match ty {
-                                    TypeSpec::None => {}
-                                    TypeSpec::Nullable => write!(self, "?")?,
-                                };
+
+                                match self.has_semantics {
+                                    true => {
+                                        write!(self, ": ")?;
+                                        let node = self.ast.previous_node();
+                                        match self.ast.get_binding_at(node) {
+                                            None => write!(self, "<err>")?,
+                                            Some(binding) => write!(self, "{}", binding.ty)?,
+                                        };
+                                    }
+                                    false => match ty {
+                                        TypeSpec::None => {}
+                                        TypeSpec::Nullable => write!(self, "?")?,
+                                    },
+                                }
 
                                 if def {
                                     write!(self, " = ")?;

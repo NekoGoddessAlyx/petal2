@@ -87,7 +87,7 @@ pub struct Binding<S> {
     pub mutability: Mutability,
     pub name: S,
     pub index: Local,
-    ty: Type<S>,
+    pub ty: Type<S>,
     initialized: Cell<bool>,
 }
 
@@ -594,6 +594,27 @@ impl<S: CompileString> Type<S> {
                 None => self.clone(),
                 Some(t) => t.substitute(substitutions),
             },
+        }
+    }
+}
+
+impl<S: CompileString> Display for Type<S> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Type::Dynamic(true) => write!(f, "dyn?"),
+            Type::Dynamic(false) => write!(f, "dyn"),
+            Type::Never => write!(f, "!"),
+            Type::Null => write!(f, "Null"),
+            Type::Boolean(true) => write!(f, "Bool"),
+            Type::Boolean(false) => write!(f, "Bool?"),
+            Type::Integer(true) => write!(f, "Int"),
+            Type::Integer(false) => write!(f, "Int?"),
+            Type::Float(true) => write!(f, "Float"),
+            Type::Float(false) => write!(f, "Float?"),
+            Type::String(true) => write!(f, "String"),
+            Type::String(false) => write!(f, "String?"),
+            Type::NewType(_ty) => todo!(),
+            Type::Variable(_v) => todo!(),
         }
     }
 }

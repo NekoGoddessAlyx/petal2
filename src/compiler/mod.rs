@@ -256,7 +256,8 @@ where
     impl Display for Ast2Display<'_, '_> {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             writeln!(f, "Semantics Check({:?})", self.1)?;
-            write!(f, "Bindings: {:?}", self.0.bindings())?;
+            writeln!(f, "Bindings: {:?}", self.0.bindings())?;
+            write!(f, "Ast (pretty): {}", self.0)?;
             Ok(())
         }
     }
