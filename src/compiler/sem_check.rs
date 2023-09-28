@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::compiler::ast::{
     Ast1, Ast1Iterator, Ast2, BinOp, Expr, Mutability, NodeError, NodeRef, RefLen, Root, Stat,
-    TypeSpec,
+    TypeSpec, UnOp,
 };
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::Span;
@@ -151,6 +151,7 @@ enum State<S> {
     ExitExpr(Type<S>),
 
     ExitVarAssignment(Type<S>),
+    ExitUnExpr(UnOp),
     ContinueBinExpr(BinOp),
     ExitBinExpr(BinOp, Type<S>),
 
@@ -399,7 +400,8 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                             self.push_state(State::EnterExpr);
                         }
                     }
-                    Expr::UnOp { .. } => {
+                    Expr::UnOp { op } => {
+                        self.push_state(State::ExitUnExpr(op));
                         self.push_state(State::EnterExpr);
                     }
                     Expr::BinOp { op, len } => {
@@ -424,6 +426,14 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                                 // todo
                             }
                         }
+                        self.push_state(State::ExitExpr(left_ty.clone()));
+                    }
+                    _ => todo!("state error"),
+                },
+                State::ExitUnExpr(op) => match previous {
+                    Some(State::ExitExpr(ref right_ty)) => {
+                        let ty = self.un_op_type(op, right_ty);
+                        self.push_state(State::ExitExpr(ty));
                     }
                     _ => todo!("state error"),
                 },
@@ -432,7 +442,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                         self.push_state(State::ExitBinExpr(op, ty));
                         self.push_state(State::EnterExpr);
                     }
-                    _ => todo!("state error"),
+                    _ => todo!("state error {:?}, {:#?}", previous, self.state),
                 },
                 State::ExitBinExpr(op, ref left_ty) => match previous {
                     Some(State::ExitExpr(ref right_ty)) => {
@@ -536,6 +546,25 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                     Type::Dynamic(true)
                 }
             },
+        }
+    }
+
+    fn un_op_type(&mut self, op: UnOp, right_ty: &Type<S>) -> Type<S> {
+        match op {
+            UnOp::Neg => match right_ty {
+                Type::Dynamic(n) => Type::Dynamic(*n),
+                Type::Never => Type::Never,
+                Type::Integer(false) => Type::Integer(false),
+                Type::Float(false) => Type::Float(false),
+                _ => {
+                    self.on_error(
+                        &SemCheckMsg::TypeError(TypeError::CannotUnOp(right_ty.clone())),
+                        None,
+                    ); // todo
+                    Type::Dynamic(true)
+                }
+            },
+            UnOp::Not => Type::Boolean(false),
         }
     }
 }
@@ -746,6 +775,7 @@ pub enum TypeError<S> {
     TypeNotEqual(Type<S>, Type<S>),
     InfiniteType(TypeVariable, Type<S>),
     CannotAdd(Type<S>, Type<S>),
+    CannotUnOp(Type<S>),
     CannotBinOp(Type<S>, Type<S>),
 }
 
@@ -760,6 +790,10 @@ impl<S: CompileString> Display for TypeError<S> {
             }
             TypeError::CannotAdd(a, b) => {
                 write!(f, "Cannot add types ({:?}, {:?})", a, b)
+            }
+            TypeError::CannotUnOp(a) => {
+                // TODO op
+                write!(f, "Cannot perform operation (?) ({:?})", a)
             }
             TypeError::CannotBinOp(a, b) => {
                 // TODO op
