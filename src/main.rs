@@ -64,7 +64,7 @@ fn compile_and_run<S: AsRef<[u8]>>(file_name: Option<&str>, source: S) {
                 println!("Interpret time: {:?}", it);
             }
             Err(error) => {
-                println!("Error occurred while interpreting: {:?}", error);
+                println!("Error occurred while interpreting: {}", error);
             }
         }
     })

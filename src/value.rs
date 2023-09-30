@@ -17,6 +17,16 @@ pub enum Value<'gc> {
 }
 
 impl<'gc> Value<'gc> {
+    pub fn type_name(self) -> &'static str {
+        match self {
+            Value::Null => "Null",
+            Value::Boolean(_) => "Bool",
+            Value::Integer(_) => "Int",
+            Value::Float(_) => "Float",
+            Value::String(_) => "String",
+        }
+    }
+
     pub fn to_bool(self) -> bool {
         match self {
             Value::Null | Value::Boolean(false) => false,
@@ -30,10 +40,24 @@ impl<'gc> Value<'gc> {
             (Value::Integer(a), Value::Float(b)) => Value::Float((a as f64) + b),
             (Value::Float(a), Value::Integer(b)) => Value::Float(a + (b as f64)),
             (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
-            (a @ Value::String(_), b) | (a, b @ Value::String(_)) => {
-                Value::String(PString::concat_from_slice(mc, &[a, b]).map_err(|_| TypeError)?)
+            (a @ Value::String(_), b) => Value::String(
+                PString::concat_from_slice(mc, &[a, b]).map_err(|_| TypeError {
+                    expected: "",
+                    got: b.type_name(),
+                })?,
+            ),
+            (a, b @ Value::String(_)) => Value::String(
+                PString::concat_from_slice(mc, &[a, b]).map_err(|_| TypeError {
+                    expected: "String",
+                    got: a.type_name(),
+                })?,
+            ),
+            _ => {
+                return Err(TypeError {
+                    expected: "Number",
+                    got: self.type_name(),
+                })
             }
-            _ => return Err(TypeError),
         })
     }
 }
@@ -81,10 +105,12 @@ impl Hash for Value<'_> {
     }
 }
 
-// TODO: needs info
 #[derive(Debug, Error)]
-#[error("TypeError")]
-pub struct TypeError;
+#[error("Expected {} but got {}", .expected, .got)]
+pub struct TypeError {
+    expected: &'static str,
+    got: &'static str,
+}
 
 impl std::ops::Neg for Value<'_> {
     type Output = Result<Self, TypeError>;
@@ -93,7 +119,12 @@ impl std::ops::Neg for Value<'_> {
         Ok(match self {
             Value::Integer(v) => Value::Integer(-v),
             Value::Float(v) => Value::Float(-v),
-            _ => return Err(TypeError),
+            _ => {
+                return Err(TypeError {
+                    expected: "Number",
+                    got: self.type_name(),
+                })
+            }
         })
     }
 }
@@ -133,7 +164,24 @@ impl std::ops::Sub for Value<'_> {
             (Value::Integer(a), Value::Float(b)) => Value::Float((a as f64) - b),
             (Value::Float(a), Value::Integer(b)) => Value::Float(a - (b as f64)),
             (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
-            _ => return Err(TypeError),
+            (Value::Integer(_) | Value::Float(_), b) => {
+                return Err(TypeError {
+                    expected: "Number",
+                    got: b.type_name(),
+                })
+            }
+            (a, Value::Integer(_) | Value::Float(_)) => {
+                return Err(TypeError {
+                    expected: "Number",
+                    got: a.type_name(),
+                })
+            }
+            _ => {
+                return Err(TypeError {
+                    expected: "Number",
+                    got: self.type_name(),
+                })
+            }
         })
     }
 }
@@ -147,7 +195,24 @@ impl std::ops::Mul for Value<'_> {
             (Value::Integer(a), Value::Float(b)) => Value::Float((a as f64) * b),
             (Value::Float(a), Value::Integer(b)) => Value::Float(a * (b as f64)),
             (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
-            _ => return Err(TypeError),
+            (Value::Integer(_) | Value::Float(_), b) => {
+                return Err(TypeError {
+                    expected: "Number",
+                    got: b.type_name(),
+                })
+            }
+            (a, Value::Integer(_) | Value::Float(_)) => {
+                return Err(TypeError {
+                    expected: "Number",
+                    got: a.type_name(),
+                })
+            }
+            _ => {
+                return Err(TypeError {
+                    expected: "Number",
+                    got: self.type_name(),
+                })
+            }
         })
     }
 }
@@ -164,7 +229,24 @@ impl std::ops::Div for Value<'_> {
             (Value::Integer(a), Value::Float(b)) => Value::Float((a as f64) / b),
             (Value::Float(a), Value::Integer(b)) => Value::Float(a / (b as f64)),
             (Value::Float(a), Value::Float(b)) => Value::Float(a / b),
-            _ => return Err(TypeError),
+            (Value::Integer(_) | Value::Float(_), b) => {
+                return Err(TypeError {
+                    expected: "Number",
+                    got: b.type_name(),
+                })
+            }
+            (a, Value::Integer(_) | Value::Float(_)) => {
+                return Err(TypeError {
+                    expected: "Number",
+                    got: a.type_name(),
+                })
+            }
+            _ => {
+                return Err(TypeError {
+                    expected: "Number",
+                    got: self.type_name(),
+                })
+            }
         })
     }
 }
@@ -347,19 +429,37 @@ macro_rules! impl_integer_from {
             impl<'gc> FromValue<'gc> for $t {
                 fn from_value(value: Value<'gc>) -> Result<Self, TypeError> {
                     match value {
-                        Value::Integer(v) => v.try_into().map_err(|_| TypeError),
+                        Value::Integer(v) => v.try_into().map_err(|_| TypeError {
+                            expected: "Int",
+                            got: "Int",
+                        }),
                         Value::Float(v) => {
                             let v_i = v as i64;
                             match (v_i as f64) == v {
-                                true => v_i.try_into().map_err(|_| TypeError),
-                                false => Err(TypeError),
+                                true => v_i.try_into().map_err(|_| TypeError {
+                                    expected: "Int",
+                                    got: "Float",
+                                }),
+                                false => Err(TypeError {
+                                    expected: "Int",
+                                    got: "Float",
+                                }),
                             }
                         }
                         Value::String(v) => {
-                            let s = std::str::from_utf8(v.as_bytes()).map_err(|_| TypeError)?;
-                            str::parse(s).map_err(|_| TypeError)
+                            let s = std::str::from_utf8(v.as_bytes()).map_err(|_| TypeError {
+                                expected: "Int",
+                                got: "String",
+                            })?;
+                            str::parse(s).map_err(|_| TypeError {
+                                expected: "Int",
+                                got: "String",
+                            })
                         }
-                        _ => Err(TypeError),
+                        _ => Err(TypeError {
+                            expected: "Int",
+                            got: value.type_name(),
+                        }),
                     }
                 }
             }
@@ -377,10 +477,19 @@ macro_rules! impl_float_from {
                         Value::Integer(v) => Ok(v as $t),
                         Value::Float(v) => Ok(v as $t),
                         Value::String(v) => {
-                            let s = std::str::from_utf8(v.as_bytes()).map_err(|_| TypeError)?;
-                            str::parse(s).map_err(|_| TypeError)
+                            let s = std::str::from_utf8(v.as_bytes()).map_err(|_| TypeError {
+                                expected: "Float",
+                                got: "String",
+                            })?;
+                            str::parse(s).map_err(|_| TypeError {
+                                expected: "Float",
+                                got: "String",
+                            })
                         }
-                        _ => Err(TypeError),
+                        _ => Err(TypeError {
+                            expected: "Float",
+                            got: value.type_name(),
+                        }),
                     }
                 }
             }
@@ -393,23 +502,29 @@ impl<'gc> FromValue<'gc> for () {
     fn from_value(value: Value<'gc>) -> Result<Self, TypeError> {
         match value {
             Value::Null => Ok(()),
-            _ => Err(TypeError),
+            _ => Err(TypeError {
+                expected: "Null",
+                got: value.type_name(),
+            }),
         }
     }
 }
 
 macro_rules! impl_from {
-    ($($v: ident -> $t: ty),* $(,)?) => {
+    ($($v: ident($ty_name: ident) -> $t: ty),* $(,)?) => {
         $(
             impl<'gc> FromValue<'gc> for $t {
                 fn from_value(value: Value<'gc>) -> Result<Self, TypeError> {
                     match value {
                         Value::$v(v) => Ok(v),
-                        _ => Err(TypeError),
+                        _ => Err(TypeError {
+                            expected: "$ty_name",
+                            got: value.type_name(),
+                        }),
                     }
                 }
             }
         )*
     };
 }
-impl_from!(Boolean -> bool, String -> PString<'gc>);
+impl_from!(Boolean(Bool) -> bool, String(String) -> PString<'gc>);
