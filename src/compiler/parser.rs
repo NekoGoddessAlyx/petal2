@@ -688,7 +688,10 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                             _ => false,
                         };
 
-                        Some(TypeSpec::Ty(ty, has_quest))
+                        Some(match ty.as_ref() {
+                            b"_" => TypeSpec::Infer(has_quest),
+                            _ => TypeSpec::Ty(ty, has_quest),
+                        })
                     }
                     _ => {
                         let location = self.peek_location();

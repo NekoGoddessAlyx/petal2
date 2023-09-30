@@ -157,13 +157,14 @@ pub enum Mutability {
 #[derive(Copy, Clone, Debug)]
 pub enum TypeSpec<S> {
     Dyn(bool),
+    Infer(bool),
     Ty(S, bool),
 }
 
 impl<S> TypeSpec<S> {
     pub fn is_nullable(&self) -> bool {
         match self {
-            TypeSpec::Dyn(n) | TypeSpec::Ty(_, n) => *n,
+            TypeSpec::Dyn(n) | TypeSpec::Infer(n) | TypeSpec::Ty(_, n) => *n,
         }
     }
 }
@@ -899,6 +900,8 @@ mod display {
                                     false => match ty {
                                         TypeSpec::Dyn(true) => write!(self, "dyn?")?,
                                         TypeSpec::Dyn(false) => write!(self, "dyn")?,
+                                        TypeSpec::Infer(true) => write!(self, "_?")?,
+                                        TypeSpec::Infer(false) => write!(self, "_")?,
                                         TypeSpec::Ty(ty, true) => write!(self, "{}?", ty)?,
                                         TypeSpec::Ty(ty, false) => write!(self, "{}", ty)?,
                                     },

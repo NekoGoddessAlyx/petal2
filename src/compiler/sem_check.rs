@@ -381,10 +381,15 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     }
 
     fn declare_var(&mut self, node: NodeRef, mut def_ty: Option<Type<S>>) -> Result<()> {
+        let mut make_nullable = false;
         let ty = match self.ast.get_stat_at(node)? {
             Stat::VarDecl { mutability, ty, .. } => {
                 if mutability == &Mutability::Mutable && def_ty.is_none() && ty.is_nullable() {
                     def_ty = Some(Type::Null);
+                }
+
+                if let TypeSpec::Infer(true) = ty {
+                    make_nullable = true;
                 }
 
                 match self.get_ty(ty) {
@@ -398,9 +403,6 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
             }
             _ => return Err(SemCheckError::NodeError(NodeError::ExpectedStat)),
         };
-        // let ty = self.next_type();
-        // let ty = Type::Dynamic(true);
-        // let ty = Type::Dynamic(false);
 
         let initialized = def_ty.is_some();
         if let Some(b) = def_ty {
@@ -412,7 +414,10 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                 }
             }
         }
-        let ty = ty.substitute(&self.substitutions);
+        let mut ty = ty.substitute(&self.substitutions);
+        if make_nullable {
+            ty = ty.to_nullable();
+        }
 
         match self.ast.get_stat_at(node)? {
             Stat::VarDecl {
@@ -571,6 +576,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     fn get_ty(&mut self, ty: &TypeSpec<S>) -> std::result::Result<Type<S>, TypeError<S>> {
         Ok(match ty {
             TypeSpec::Dyn(n) => Type::Dynamic(*n),
+            TypeSpec::Infer(_) => self.next_type(),
             TypeSpec::Ty(ty, n) => match ty.as_ref() {
                 b"Null" => Type::Null,
                 b"Bool" => Type::Boolean(*n),
@@ -699,6 +705,20 @@ impl<S: CompileString> Type<S> {
                 None => self.clone(),
                 Some(t) => t.substitute(substitutions),
             },
+        }
+    }
+
+    fn to_nullable(self) -> Self {
+        match self {
+            Type::Dynamic(_) => Type::Dynamic(true),
+            Type::Never => Type::Never,
+            Type::Null => Type::Null,
+            Type::Boolean(_) => Type::Boolean(true),
+            Type::Integer(_) => Type::Integer(true),
+            Type::Float(_) => Type::Float(true),
+            Type::String(_) => Type::String(true),
+            Type::NewType(_) => todo!(),
+            Type::Variable(_) => self.clone(),
         }
     }
 }

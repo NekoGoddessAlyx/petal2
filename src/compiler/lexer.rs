@@ -392,7 +392,7 @@ where
                 self.read_string();
             }
             (Some(c), _) if c.is_ascii_digit() => self.read_number(),
-            (Some(c), _) if c.is_ascii_alphabetic() => self.read_identifier(),
+            (Some(c), _) if c.is_ascii_alphabetic() || c == b'_' => self.read_identifier(),
             (Some(c), _) => {
                 self.advance(1);
                 self.on_error(LexerErr::UnexpectedCharacter(c));
