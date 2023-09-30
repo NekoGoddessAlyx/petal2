@@ -76,6 +76,8 @@ pub enum SemCheckError {
     FailedSemCheck,
     #[error(transparent)]
     NodeError(#[from] NodeError),
+    #[error("Invalid state transition")]
+    BadTransition,
     #[error("Context is missing")]
     MissingContext,
     #[error("Scope is missing")]
@@ -271,6 +273,14 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
 
     fn visit(&mut self) -> Result<()> {
         let mut previous = None;
+
+        macro_rules! fail_transfer {
+            () => {{
+                dbg!(&previous);
+                return Err(SemCheckError::BadTransition);
+            }};
+        }
+
         while let Some(state) = self.pop_state() {
             match state {
                 State::EnterRoot => match self.ast.next_root()? {
@@ -420,28 +430,28 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                         }
                         self.push_state(State::ExitExpr(left_ty.clone()));
                     }
-                    _ => todo!("state error"),
+                    _ => fail_transfer!(),
                 },
                 State::ExitUnExpr(op) => match previous {
                     Some(State::ExitExpr(ref right_ty)) => {
                         let ty = self.un_op_type(op, right_ty);
                         self.push_state(State::ExitExpr(ty));
                     }
-                    _ => todo!("state error"),
+                    _ => fail_transfer!(),
                 },
                 State::ContinueBinExpr(op) => match previous {
                     Some(State::ExitExpr(ty)) => {
                         self.push_state(State::ExitBinExpr(op, ty));
                         self.push_state(State::EnterExpr);
                     }
-                    _ => todo!("state error {:?}, {:#?}", previous, self.state),
+                    _ => fail_transfer!(),
                 },
                 State::ExitBinExpr(op, ref left_ty) => match previous {
                     Some(State::ExitExpr(ref right_ty)) => {
                         let ty = self.bin_op_type(op, left_ty, right_ty);
                         self.push_state(State::ExitExpr(ty));
                     }
-                    _ => todo!("state error"),
+                    _ => fail_transfer!(),
                 },
 
                 State::EndScope => {
