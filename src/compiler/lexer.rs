@@ -67,8 +67,10 @@ pub enum Token<S> {
     Colon,
 
     Eq,
+    EqEq,
 
     Bang,
+    BangEq,
 
     Quest,
 
@@ -328,66 +330,74 @@ where
 
         self.start_cursor();
 
-        match self.peek(0) {
-            Some(b'{') => {
+        match (self.peek(0), self.peek(1)) {
+            (Some(b'{'), _) => {
                 self.advance(1);
                 self.push_token(Token::BraceOpen);
             }
-            Some(b'}') => {
+            (Some(b'}'), _) => {
                 self.advance(1);
                 self.push_token(Token::BraceClose);
             }
-            Some(b'(') => {
+            (Some(b'('), _) => {
                 self.advance(1);
                 self.push_token(Token::ParenOpen);
             }
-            Some(b')') => {
+            (Some(b')'), _) => {
                 self.advance(1);
                 self.push_token(Token::ParenClose);
             }
-            Some(b':') => {
+            (Some(b':'), _) => {
                 self.advance(1);
                 self.push_token(Token::Colon);
             }
-            Some(b'=') => {
+            (Some(b'='), Some(b'=')) => {
+                self.advance(2);
+                self.push_token(Token::EqEq);
+            }
+            (Some(b'='), _) => {
                 self.advance(1);
                 self.push_token(Token::Eq);
             }
-            Some(b'!') => {
+            (Some(b'!'), Some(b'=')) => {
+                self.advance(2);
+                self.push_token(Token::BangEq);
+            }
+            (Some(b'!'), _) => {
                 self.advance(1);
                 self.push_token(Token::Bang);
             }
-            Some(b'?') => {
+            (Some(b'?'), _) => {
                 self.advance(1);
                 self.push_token(Token::Quest);
             }
-            Some(b'+') => {
+            (Some(b'+'), _) => {
                 self.advance(1);
                 self.push_token(Token::Add);
             }
-            Some(b'-') => {
+            (Some(b'-'), _) => {
                 self.advance(1);
                 self.push_token(Token::Sub);
             }
-            Some(b'*') => {
+            (Some(b'*'), _) => {
                 self.advance(1);
                 self.push_token(Token::Mul);
             }
-            Some(b'/') => {
+            (Some(b'/'), _) => {
                 self.advance(1);
                 self.push_token(Token::Div);
             }
-            Some(b'"') => {
+            (Some(b'"'), _) => {
                 self.advance(1);
                 self.read_string();
             }
-            Some(c) if c.is_ascii_digit() => self.read_number(),
-            Some(c) if c.is_ascii_alphabetic() => self.read_identifier(),
-            Some(c) => {
+            (Some(c), _) if c.is_ascii_digit() => self.read_number(),
+            (Some(c), _) if c.is_ascii_alphabetic() => self.read_identifier(),
+            (Some(c), _) => {
                 self.advance(1);
                 self.on_error(LexerErr::UnexpectedCharacter(c));
             }
-            None => {}
+            (None, _) => {}
         }
     }
 

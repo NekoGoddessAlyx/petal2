@@ -54,6 +54,48 @@ pub enum Instruction {
         right: CIndex16,
     },
 
+    EqRR {
+        destination: RIndex,
+        left: RIndex,
+        right: RIndex,
+    },
+    EqRC {
+        destination: RIndex,
+        left: RIndex,
+        right: CIndex8,
+    },
+    EqCC {
+        destination: RIndex,
+        left: CIndex8,
+        right: CIndex8,
+    },
+    EqCR {
+        destination: RIndex,
+        left: CIndex8,
+        right: RIndex,
+    },
+
+    NeqRR {
+        destination: RIndex,
+        left: RIndex,
+        right: RIndex,
+    },
+    NeqRC {
+        destination: RIndex,
+        left: RIndex,
+        right: CIndex8,
+    },
+    NeqCC {
+        destination: RIndex,
+        left: CIndex8,
+        right: CIndex8,
+    },
+    NeqCR {
+        destination: RIndex,
+        left: CIndex8,
+        right: RIndex,
+    },
+
     AddRR {
         destination: RIndex,
         left: RIndex,
@@ -168,6 +210,14 @@ impl Instruction {
             Instruction::NegC { .. } => "NEG_C",
             Instruction::NotR { .. } => "NOT_R",
             Instruction::NotC { .. } => "NOT_C",
+            Instruction::EqRR { .. } => "EQ_RR",
+            Instruction::EqRC { .. } => "EQ_RC",
+            Instruction::EqCC { .. } => "EQ_CC",
+            Instruction::EqCR { .. } => "EQ_CR",
+            Instruction::NeqRR { .. } => "NEQ_RR",
+            Instruction::NeqRC { .. } => "NEQ_RC",
+            Instruction::NeqCC { .. } => "NEQ_CC",
+            Instruction::NeqCR { .. } => "NEQ_CR",
             Instruction::AddRR { .. } => "ADD_RR",
             Instruction::AddRC { .. } => "ADD_RC",
             Instruction::AddCC { .. } => "ADD_CC",
@@ -238,7 +288,17 @@ impl Display for Instruction {
                 write!(f, "{:4} {:9}", destination, integer)
             }
 
-            Instruction::AddRR {
+            Instruction::EqRR {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::NeqRR {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::AddRR {
                 destination,
                 left,
                 right,
@@ -261,7 +321,17 @@ impl Display for Instruction {
                 write!(f, "{:4} {:4} {:4}", destination, left, right)
             }
 
-            Instruction::AddRC {
+            Instruction::EqRC {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::NeqRC {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::AddRC {
                 destination,
                 left,
                 right,
@@ -284,7 +354,17 @@ impl Display for Instruction {
                 write!(f, "{:4} {:4} {:4}", destination, left, right)
             }
 
-            Instruction::AddCC {
+            Instruction::EqCC {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::NeqCC {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::AddCC {
                 destination,
                 left,
                 right,
@@ -307,7 +387,17 @@ impl Display for Instruction {
                 write!(f, "{:4} {:4} {:4}", destination, left, right)
             }
 
-            Instruction::AddCR {
+            Instruction::EqCR {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::NeqCR {
+                destination,
+                left,
+                right,
+            }
+            | Instruction::AddCR {
                 destination,
                 left,
                 right,

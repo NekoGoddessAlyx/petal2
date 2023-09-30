@@ -976,6 +976,8 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
         };
 
         match next_token {
+            Token::EqEq => bin_expr(BinOp::Eq),
+            Token::BangEq => bin_expr(BinOp::NotEq),
             Token::Add => bin_expr(BinOp::Add),
             Token::Sub => bin_expr(BinOp::Sub),
             Token::Mul => bin_expr(BinOp::Mul),
@@ -1042,6 +1044,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 #[derive(Copy, Clone, PartialEq, PartialOrd, Debug)]
 enum Precedence {
     None,
+    Equality,
     Additive,
     Multiplicative,
     Prefix,
@@ -1050,12 +1053,13 @@ enum Precedence {
 
 impl Precedence {
     fn root() -> Self {
-        Precedence::Additive
+        Precedence::Equality
     }
 
     fn next_precedence(self) -> Self {
         match self {
-            Precedence::None => Precedence::Additive,
+            Precedence::None => Precedence::Equality,
+            Precedence::Equality => Precedence::Additive,
             Precedence::Additive => Precedence::Multiplicative,
             Precedence::Multiplicative => Precedence::Prefix,
             Precedence::Prefix | Precedence::Primary => Precedence::Primary,
@@ -1066,6 +1070,7 @@ impl Precedence {
 impl<S> Token<S> {
     fn precedence(&self) -> Precedence {
         match self {
+            Token::EqEq | Token::BangEq => Precedence::Equality,
             Token::Add | Token::Sub => Precedence::Additive,
             Token::Mul | Token::Div => Precedence::Multiplicative,
             _ => Precedence::None,

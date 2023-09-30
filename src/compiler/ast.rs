@@ -204,6 +204,8 @@ pub enum UnOp {
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum BinOp {
+    Eq,
+    NotEq,
     Add,
     Sub,
     Mul,
@@ -974,6 +976,8 @@ mod display {
                     },
                     State::ContinueBinOp(op) => {
                         match op {
+                            BinOp::Eq => write!(self, " == ")?,
+                            BinOp::NotEq => write!(self, " != ")?,
                             BinOp::Add => write!(self, " + ")?,
                             BinOp::Sub => write!(self, " - ")?,
                             BinOp::Mul => write!(self, " * ")?,

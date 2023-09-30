@@ -99,22 +99,30 @@ impl Display for Prototype<'_> {
                         Instruction::LoadN { .. }
                         | Instruction::LoadB { .. }
                         | Instruction::LoadI { .. } => Ok(()),
-                        Instruction::AddRR { .. }
+                        Instruction::EqRR { .. }
+                        | Instruction::NeqRR { .. }
+                        | Instruction::AddRR { .. }
                         | Instruction::SubRR { .. }
                         | Instruction::MulRR { .. }
                         | Instruction::DivRR { .. } => Ok(()),
-                        Instruction::AddRC { right, .. }
+                        Instruction::EqRC { right, .. }
+                        | Instruction::NeqRC { right, .. }
+                        | Instruction::AddRC { right, .. }
                         | Instruction::SubRC { right, .. }
                         | Instruction::MulRC { right, .. }
                         | Instruction::DivRC { right, .. } => fmt_c(f, constants, right),
-                        Instruction::AddCC { left, right, .. }
+                        Instruction::EqCC { left, right, .. }
+                        | Instruction::NeqCC { left, right, .. }
+                        | Instruction::AddCC { left, right, .. }
                         | Instruction::SubCC { left, right, .. }
                         | Instruction::MulCC { left, right, .. }
                         | Instruction::DivCC { left, right, .. } => {
                             fmt_c(f, constants, left)?;
                             fmt_c(f, constants, right)
                         }
-                        Instruction::AddCR { left, .. }
+                        Instruction::EqCR { left, .. }
+                        | Instruction::NeqCR { left, .. }
+                        | Instruction::AddCR { left, .. }
                         | Instruction::SubCR { left, .. }
                         | Instruction::MulCR { left, .. }
                         | Instruction::DivCR { left, .. } => fmt_c(f, constants, left),

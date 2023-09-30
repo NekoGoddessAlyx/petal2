@@ -97,6 +97,48 @@ pub fn interpret<'gc>(
                 Instruction::NotR { destination, right } => mov!(destination, (!peek!(right))?),
                 Instruction::NotC { destination, right } => mov!(destination, (!constant!(right))?),
 
+                Instruction::EqRR {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, (peek!(left) == peek!(right)).into()),
+                Instruction::EqRC {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, (peek!(left) == constant!(right)).into()),
+                Instruction::EqCR {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, (constant!(left) == peek!(right)).into()),
+                Instruction::EqCC {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, (constant!(left) == constant!(right)).into()),
+
+                Instruction::NeqRR {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, (peek!(left) != peek!(right)).into()),
+                Instruction::NeqRC {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, (peek!(left) != constant!(right)).into()),
+                Instruction::NeqCR {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, (constant!(left) != peek!(right)).into()),
+                Instruction::NeqCC {
+                    destination,
+                    left,
+                    right,
+                } => mov!(destination, (constant!(left) != constant!(right)).into()),
+
                 Instruction::AddRR {
                     destination,
                     left,

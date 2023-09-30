@@ -1062,6 +1062,8 @@ where
         if let Some(dest) = self.try_inline_value(
             [left, right],
             |mc, [a, b]| match op {
+                BinOp::Eq => Ok(a.eq(&b).into()),
+                BinOp::NotEq => Ok((!a.eq(&b)).into()),
                 BinOp::Add => a.add(mc, b),
                 BinOp::Sub => a - b,
                 BinOp::Mul => a * b,
@@ -1079,6 +1081,8 @@ where
         self.free_temp(right);
         let dest = self.allocate(dest)?;
         let instruction = match op {
+            BinOp::Eq => Instruction::eq(dest.into(), left, right),
+            BinOp::NotEq => Instruction::neq(dest.into(), left, right),
             BinOp::Add => Instruction::add(dest.into(), left, right),
             BinOp::Sub => Instruction::sub(dest.into(), left, right),
             BinOp::Mul => Instruction::mul(dest.into(), left, right),
@@ -1433,6 +1437,78 @@ impl Instruction {
                 destination: dest.into(),
                 right: c,
             },
+        }
+    }
+
+    fn eq(dest: Register, left: RegisterOrConstant8, right: RegisterOrConstant8) -> Instruction {
+        match (left, right) {
+            (
+                RegisterOrConstant8::Protected(l) | RegisterOrConstant8::Temporary(l),
+                RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
+            ) => Instruction::EqRR {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (
+                RegisterOrConstant8::Protected(l) | RegisterOrConstant8::Temporary(l),
+                RegisterOrConstant8::Constant8(r),
+            ) => Instruction::EqRC {
+                destination: dest.into(),
+                left: l.into(),
+                right: r,
+            },
+            (
+                RegisterOrConstant8::Constant8(l),
+                RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
+            ) => Instruction::EqCR {
+                destination: dest.into(),
+                left: l,
+                right: r.into(),
+            },
+            (RegisterOrConstant8::Constant8(l), RegisterOrConstant8::Constant8(r)) => {
+                Instruction::EqCC {
+                    destination: dest.into(),
+                    left: l,
+                    right: r,
+                }
+            }
+        }
+    }
+
+    fn neq(dest: Register, left: RegisterOrConstant8, right: RegisterOrConstant8) -> Instruction {
+        match (left, right) {
+            (
+                RegisterOrConstant8::Protected(l) | RegisterOrConstant8::Temporary(l),
+                RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
+            ) => Instruction::NeqRR {
+                destination: dest.into(),
+                left: l.into(),
+                right: r.into(),
+            },
+            (
+                RegisterOrConstant8::Protected(l) | RegisterOrConstant8::Temporary(l),
+                RegisterOrConstant8::Constant8(r),
+            ) => Instruction::NeqRC {
+                destination: dest.into(),
+                left: l.into(),
+                right: r,
+            },
+            (
+                RegisterOrConstant8::Constant8(l),
+                RegisterOrConstant8::Protected(r) | RegisterOrConstant8::Temporary(r),
+            ) => Instruction::NeqCR {
+                destination: dest.into(),
+                left: l,
+                right: r.into(),
+            },
+            (RegisterOrConstant8::Constant8(l), RegisterOrConstant8::Constant8(r)) => {
+                Instruction::NeqCC {
+                    destination: dest.into(),
+                    left: l,
+                    right: r,
+                }
+            }
         }
     }
 

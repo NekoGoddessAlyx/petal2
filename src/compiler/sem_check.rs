@@ -584,6 +584,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
 
     fn bin_op_type(&mut self, op: BinOp, left_ty: &Type<S>, right_ty: &Type<S>) -> Type<S> {
         match op {
+            BinOp::Eq | BinOp::NotEq => Type::Boolean(false),
             BinOp::Add => match (left_ty, right_ty) {
                 (Type::Dynamic(n), _) | (_, Type::Dynamic(n)) => Type::Dynamic(*n),
                 (Type::Never, _) | (_, Type::Never) => Type::Never,
