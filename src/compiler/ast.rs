@@ -102,8 +102,9 @@ pub enum Node<S> {
     Expr(Expr<S>),
 }
 
+// TODO: VarDecl is too large, could be broken into two parts
 // Assume string type is sized as u64
-static_assert_size!(Node<u64>, 24);
+static_assert_size!(Node<u64>, 32);
 
 impl<S> From<Root> for Node<S> {
     fn from(value: Root) -> Self {
@@ -138,7 +139,7 @@ pub enum Stat<S> {
     VarDecl {
         mutability: Mutability,
         name: S,
-        ty: TypeSpec,
+        ty: TypeSpec<S>,
         def: bool,
     },
     If {
@@ -154,9 +155,17 @@ pub enum Mutability {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum TypeSpec {
-    None,
-    Nullable,
+pub enum TypeSpec<S> {
+    Dyn(bool),
+    Ty(S, bool),
+}
+
+impl<S> TypeSpec<S> {
+    pub fn is_nullable(&self) -> bool {
+        match self {
+            TypeSpec::Dyn(n) | TypeSpec::Ty(_, n) => *n,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -868,7 +877,7 @@ mod display {
                             Stat::VarDecl {
                                 mutability,
                                 ref name,
-                                ty,
+                                ref ty,
                                 def,
                             } => {
                                 match mutability {
@@ -876,9 +885,9 @@ mod display {
                                     Mutability::Mutable => write!(self, "var {}", name)?,
                                 };
 
+                                write!(self, ": ")?;
                                 match self.has_semantics {
                                     true => {
-                                        write!(self, ": ")?;
                                         let node = self.ast.previous_node();
                                         match self.ast.get_binding_at(node) {
                                             None => write!(self, "<err>")?,
@@ -886,8 +895,10 @@ mod display {
                                         };
                                     }
                                     false => match ty {
-                                        TypeSpec::None => {}
-                                        TypeSpec::Nullable => write!(self, "?")?,
+                                        TypeSpec::Dyn(true) => write!(self, "dyn?")?,
+                                        TypeSpec::Dyn(false) => write!(self, "dyn")?,
+                                        TypeSpec::Ty(ty, true) => write!(self, "{}?", ty)?,
+                                        TypeSpec::Ty(ty, false) => write!(self, "{}", ty)?,
                                     },
                                 }
 

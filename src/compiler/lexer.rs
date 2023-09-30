@@ -57,11 +57,14 @@ pub enum Token<S> {
     True,
     False,
     Return,
+    Dyn,
 
     BraceOpen,
     BraceClose,
     ParenOpen,
     ParenClose,
+
+    Colon,
 
     Eq,
 
@@ -342,6 +345,10 @@ where
                 self.advance(1);
                 self.push_token(Token::ParenClose);
             }
+            Some(b':') => {
+                self.advance(1);
+                self.push_token(Token::Colon);
+            }
             Some(b'=') => {
                 self.advance(1);
                 self.push_token(Token::Eq);
@@ -532,6 +539,9 @@ where
             }
             b"return" => {
                 self.push_token(Token::Return);
+            }
+            b"dyn" => {
+                self.push_token(Token::Dyn);
             }
             _ => {
                 self.push_token(Token::Identifier(string));

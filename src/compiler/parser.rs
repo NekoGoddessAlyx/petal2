@@ -622,13 +622,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
             }
         };
 
-        let ty = match self.peek() {
-            Token::Quest => {
-                self.advance();
-                TypeSpec::Nullable
-            }
-            _ => TypeSpec::None,
-        };
+        let ty = self.consume_ty();
 
         let var_decl = self.push_statement(
             push_stat,
@@ -648,6 +642,76 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 push_expr: PushExpr::VarDeclDef(var_decl),
                 precedence: Precedence::root(),
             });
+        }
+    }
+
+    fn consume_ty(&mut self) -> TypeSpec<S> {
+        self.skip_nl();
+        let quest_location = self.peek_location();
+        let has_quest = match self.peek() {
+            Token::Quest => {
+                self.advance();
+                true
+            }
+            _ => false,
+        };
+
+        self.skip_nl();
+        let ty = match self.peek() {
+            Token::Colon => {
+                self.advance();
+
+                self.skip_nl();
+                match self.peek() {
+                    Token::Dyn => {
+                        self.advance();
+
+                        let has_quest = match self.peek() {
+                            Token::Quest => {
+                                self.advance();
+                                true
+                            }
+                            _ => false,
+                        };
+
+                        Some(TypeSpec::Dyn(has_quest))
+                    }
+                    Token::Identifier(ty) => {
+                        let ty = ty.clone();
+                        self.advance();
+
+                        let has_quest = match self.peek() {
+                            Token::Quest => {
+                                self.advance();
+                                true
+                            }
+                            _ => false,
+                        };
+
+                        Some(TypeSpec::Ty(ty, has_quest))
+                    }
+                    _ => {
+                        let location = self.peek_location();
+                        self.on_error(&"Expected type", Some(location));
+                        Some(TypeSpec::Dyn(false))
+                    }
+                }
+            }
+            _ => None,
+        };
+
+        match ty {
+            Some(ty) => {
+                if has_quest {
+                    self.on_error(
+                        &"Variable was marked as nullable but a type was also explicitly specified",
+                        Some(quest_location),
+                    );
+                }
+
+                ty
+            }
+            None => TypeSpec::Dyn(has_quest),
         }
     }
 

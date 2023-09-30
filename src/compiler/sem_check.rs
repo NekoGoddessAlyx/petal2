@@ -463,16 +463,24 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                     };
 
                     let ty = match self.ast.get_stat_at(node)? {
-                        Stat::VarDecl { mutability, ty, .. } => match (mutability, ty) {
-                            (Mutability::Mutable, TypeSpec::Nullable) => {
+                        Stat::VarDecl { mutability, ty, .. } => {
+                            if let Mutability::Mutable = mutability {
                                 if let None = def_ty {
-                                    def_ty = Some(Type::Null);
+                                    if ty.is_nullable() {
+                                        def_ty = Some(Type::Null);
+                                    }
                                 }
-                                Type::Dynamic(true)
                             }
-                            (_, TypeSpec::None) => Type::Dynamic(false),
-                            (_, TypeSpec::Nullable) => Type::Dynamic(true),
-                        },
+
+                            match self.get_ty(ty) {
+                                Ok(ty) => ty,
+                                Err(e) => {
+                                    // todo location
+                                    self.on_error(&SemCheckMsg::TypeError(e), None);
+                                    Type::Dynamic(ty.is_nullable())
+                                }
+                            }
+                        }
                         _ => return Err(SemCheckError::NodeError(NodeError::ExpectedStat)),
                     };
                     // let ty = self.next_type();
@@ -505,6 +513,20 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         }
 
         Ok(())
+    }
+
+    fn get_ty(&mut self, ty: &TypeSpec<S>) -> std::result::Result<Type<S>, TypeError<S>> {
+        Ok(match ty {
+            TypeSpec::Dyn(n) => Type::Dynamic(*n),
+            TypeSpec::Ty(ty, n) => match ty.as_ref() {
+                b"Null" => Type::Null,
+                b"Bool" => Type::Boolean(*n),
+                b"Int" => Type::Integer(*n),
+                b"Float" => Type::Float(*n),
+                b"String" => Type::String(*n),
+                _ => return Err(TypeError::UnknownType(ty.clone())),
+            },
+        })
     }
 
     fn bin_op_type(&mut self, op: BinOp, left_ty: &Type<S>, right_ty: &Type<S>) -> Type<S> {
@@ -772,6 +794,7 @@ fn unify<S: CompileString>(
 
 #[derive(Debug)]
 pub enum TypeError<S> {
+    UnknownType(S),
     TypeNotEqual(Type<S>, Type<S>),
     InfiniteType(TypeVariable, Type<S>),
     CannotAdd(Type<S>, Type<S>),
@@ -782,6 +805,9 @@ pub enum TypeError<S> {
 impl<S: CompileString> Display for TypeError<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            TypeError::UnknownType(ty) => {
+                write!(f, "Unknown type ({})", ty)
+            }
             TypeError::TypeNotEqual(a, b) => {
                 write!(f, "Types not equal ({:?}, {:?})", a, b)
             }
