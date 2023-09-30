@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use std::cell::Cell;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::iter::zip;
 use std::rc::Rc;
@@ -119,14 +119,6 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast1<S>) -> Re
     sem_check.push_state(State::EnterRoot);
 
     sem_check.visit()?;
-    println!("SUBSTITUTIONS: {:#?}", sem_check.substitutions);
-    let mut bindings = sem_check.bindings.iter().collect::<Vec<_>>();
-    bindings.sort_by(|x, y| x.0.get().cmp(&y.0.get()));
-    let bindings = bindings
-        .into_iter()
-        .map(|(_, binding)| (binding.name.to_string(), binding.ty.clone()))
-        .collect::<HashSet<_>>();
-    println!("BINDINGS {:#?}", bindings);
 
     match sem_check.had_error {
         true => Err(SemCheckError::FailedSemCheck),
