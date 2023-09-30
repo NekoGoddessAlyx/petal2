@@ -154,6 +154,53 @@ enum State<S> {
     DeclareVar(NodeRef),
 }
 
+impl<S: CompileString> State<S> {
+    fn enter<C>(&mut self, from: Option<Self>, sem_check: &mut SemCheck<'_, C, S>) -> Result<()>
+    where
+        C: Callback,
+    {
+        macro_rules! fail_transfer {
+            () => {{
+                dbg!(&from);
+                Err(SemCheckError::BadTransition)
+            }};
+        }
+
+        match self {
+            State::EnterRoot => sem_check.enter_root(),
+            State::EnterStat => sem_check.enter_stat(),
+            State::ContinueCompoundStat(len) => sem_check.continue_compound_stat(*len),
+            State::EnterExpr => sem_check.enter_expr(),
+            State::ExitExpr(_) => Ok(()),
+            State::ExitVarAssignment(left_ty) => match from {
+                Some(State::ExitExpr(right_ty)) => {
+                    sem_check.exit_var_assignment(left_ty.clone(), right_ty)
+                }
+                _ => fail_transfer!(),
+            },
+            State::ExitUnExpr(op) => match from {
+                Some(State::ExitExpr(right_ty)) => sem_check.exit_unary_expr(*op, right_ty),
+                _ => fail_transfer!(),
+            },
+            State::ContinueBinExpr(op) => match from {
+                Some(State::ExitExpr(left_ty)) => sem_check.continue_bin_expr(*op, left_ty),
+                _ => fail_transfer!(),
+            },
+            State::ExitBinExpr(op, left_ty) => match from {
+                Some(State::ExitExpr(right_ty)) => {
+                    sem_check.exit_bin_expr(*op, left_ty.clone(), right_ty)
+                }
+                _ => fail_transfer!(),
+            },
+            State::EndScope => sem_check.end_scope(),
+            State::DeclareVar(node) => match from {
+                Some(State::ExitExpr(def_ty)) => sem_check.declare_var(*node, Some(def_ty)),
+                _ => sem_check.declare_var(*node, None),
+            },
+        }
+    }
+}
+
 struct SemCheck<'ast, C, S> {
     callback: C,
     had_error: bool,
@@ -274,247 +321,252 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     fn visit(&mut self) -> Result<()> {
         let mut previous = None;
 
-        macro_rules! fail_transfer {
-            () => {{
-                dbg!(&previous);
-                return Err(SemCheckError::BadTransition);
-            }};
-        }
-
-        while let Some(state) = self.pop_state() {
-            match state {
-                State::EnterRoot => match self.ast.next_root()? {
-                    Root::Statements => {
-                        self.push_state(State::EnterStat);
-                    }
-                },
-                State::EnterStat => match *self.ast.next_stat()? {
-                    Stat::Compound { len, .. } => {
-                        self.begin_scope()?;
-                        self.push_state(State::EndScope);
-                        self.push_state(State::ContinueCompoundStat(len));
-                    }
-                    Stat::VarDecl { def, .. } => {
-                        self.push_state(State::DeclareVar(self.ast.previous_node()));
-                        if def {
-                            self.push_state(State::EnterExpr);
-                        }
-                    }
-                    Stat::If { has_else } => {
-                        if has_else {
-                            self.push_state(State::EnterStat);
-                        }
-                        self.push_state(State::EnterStat);
-                        self.push_state(State::EnterExpr);
-                    }
-                    Stat::Expr => {
-                        self.push_state(State::EnterExpr);
-                    }
-                },
-                State::ContinueCompoundStat(len) => {
-                    if len > 0 {
-                        self.push_state(State::ContinueCompoundStat(len - 1));
-                        self.push_state(State::EnterStat);
-                    }
-                }
-                State::EnterExpr => match *self.ast.next_expr()? {
-                    Expr::Null => {
-                        let ty = Type::Null;
-                        // let ty = self.next_type();
-                        self.push_state(State::ExitExpr(ty));
-                    }
-                    Expr::Bool(_) => {
-                        let ty = Type::Boolean(false);
-                        self.push_state(State::ExitExpr(ty));
-                    }
-                    Expr::Integer(_) => {
-                        let ty = Type::Integer(false);
-                        self.push_state(State::ExitExpr(ty));
-                    }
-                    Expr::Float(_) => {
-                        let ty = Type::Float(false);
-                        self.push_state(State::ExitExpr(ty));
-                    }
-                    Expr::String(_) => {
-                        let ty = Type::String(false);
-                        self.push_state(State::ExitExpr(ty));
-                    }
-                    Expr::Var {
-                        ref name,
-                        assignment,
-                    } => {
-                        let node = self.ast.previous_node();
-
-                        let ty = match self.lookup(name.clone()) {
-                            Some(binding) => {
-                                self.bindings.insert(node, binding.clone());
-
-                                let initialized = binding.initialized.get();
-                                let mutability = binding.mutability;
-                                match (initialized, assignment, mutability) {
-                                    (true, true, Mutability::Immutable) => {
-                                        self.on_error(
-                                            &SemCheckMsg::CannotAssignToVal(binding.name.clone()),
-                                            self.ast.location_of(node),
-                                        );
-                                    }
-                                    (false, true, _) => {
-                                        binding.initialized.set(true);
-                                    }
-                                    (false, false, _) => {
-                                        self.on_error(
-                                            &SemCheckMsg::VariableNotInitialized(
-                                                binding.name.clone(),
-                                            ),
-                                            self.ast.location_of(node),
-                                        );
-                                    }
-                                    _ => {}
-                                }
-
-                                binding.ty.clone()
-                            }
-                            None => {
-                                self.on_error(
-                                    &SemCheckMsg::VariableNotFound(name.clone()),
-                                    self.ast.location_of(node),
-                                );
-
-                                Type::Dynamic(true)
-                                // self.next_type()
-                            }
-                        };
-
-                        match assignment {
-                            true => {
-                                self.push_state(State::ExitVarAssignment(ty));
-                                self.push_state(State::EnterExpr);
-                            }
-                            false => {
-                                self.push_state(State::ExitExpr(ty));
-                            }
-                        }
-                    }
-                    Expr::Return { right } => {
-                        let ty = Type::Never;
-                        self.push_state(State::ExitExpr(ty));
-                        if right {
-                            self.push_state(State::EnterExpr);
-                        }
-                    }
-                    Expr::UnOp { op } => {
-                        self.push_state(State::ExitUnExpr(op));
-                        self.push_state(State::EnterExpr);
-                    }
-                    Expr::BinOp { op, len } => {
-                        self.push_state(State::ContinueBinExpr(op));
-                        for _ in 1..len {
-                            self.push_state(State::ContinueBinExpr(op));
-                        }
-                        self.push_state(State::EnterExpr);
-                    }
-                    Expr::Block { len, .. } => {
-                        self.push_state(State::EnterExpr);
-                        self.push_state(State::ContinueCompoundStat(len));
-                    }
-                },
-                State::ExitExpr(..) => {}
-                State::ExitVarAssignment(ref left_ty) => match previous {
-                    Some(State::ExitExpr(ref right_ty)) => {
-                        match unify(left_ty.clone(), right_ty.clone(), &mut self.substitutions) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                self.on_error(&SemCheckMsg::TypeError(e), None);
-                                // todo
-                            }
-                        }
-                        self.push_state(State::ExitExpr(left_ty.clone()));
-                    }
-                    _ => fail_transfer!(),
-                },
-                State::ExitUnExpr(op) => match previous {
-                    Some(State::ExitExpr(ref right_ty)) => {
-                        let ty = self.un_op_type(op, right_ty);
-                        self.push_state(State::ExitExpr(ty));
-                    }
-                    _ => fail_transfer!(),
-                },
-                State::ContinueBinExpr(op) => match previous {
-                    Some(State::ExitExpr(ty)) => {
-                        self.push_state(State::ExitBinExpr(op, ty));
-                        self.push_state(State::EnterExpr);
-                    }
-                    _ => fail_transfer!(),
-                },
-                State::ExitBinExpr(op, ref left_ty) => match previous {
-                    Some(State::ExitExpr(ref right_ty)) => {
-                        let ty = self.bin_op_type(op, left_ty, right_ty);
-                        self.push_state(State::ExitExpr(ty));
-                    }
-                    _ => fail_transfer!(),
-                },
-
-                State::EndScope => {
-                    self.end_scope()?;
-                }
-                State::DeclareVar(node) => {
-                    let mut def_ty = if let Some(State::ExitExpr(ty)) = previous {
-                        Some(ty)
-                    } else {
-                        None
-                    };
-
-                    let ty = match self.ast.get_stat_at(node)? {
-                        Stat::VarDecl { mutability, ty, .. } => {
-                            if mutability == &Mutability::Mutable
-                                && def_ty.is_none()
-                                && ty.is_nullable()
-                            {
-                                def_ty = Some(Type::Null);
-                            }
-
-                            match self.get_ty(ty) {
-                                Ok(ty) => ty,
-                                Err(e) => {
-                                    // todo location
-                                    self.on_error(&SemCheckMsg::TypeError(e), None);
-                                    Type::Dynamic(ty.is_nullable())
-                                }
-                            }
-                        }
-                        _ => return Err(SemCheckError::NodeError(NodeError::ExpectedStat)),
-                    };
-                    // let ty = self.next_type();
-                    // let ty = Type::Dynamic(true);
-                    // let ty = Type::Dynamic(false);
-
-                    let initialized = def_ty.is_some();
-                    if let Some(b) = def_ty {
-                        match unify(ty.clone(), b, &mut self.substitutions) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                self.on_error(&SemCheckMsg::TypeError(e), None);
-                                // todo
-                            }
-                        }
-                    }
-                    let ty = ty.substitute(&self.substitutions);
-
-                    match self.ast.get_stat_at(node)? {
-                        Stat::VarDecl {
-                            mutability, name, ..
-                        } => {
-                            self.declare(node, *mutability, name.clone(), ty, initialized)?;
-                        }
-                        _ => return Err(SemCheckError::NodeError(NodeError::ExpectedStat)),
-                    }
-                }
-            }
+        while let Some(mut state) = self.pop_state() {
+            state.enter(previous, self)?;
             previous = Some(state);
         }
 
         Ok(())
     }
+
+    // root
+
+    fn enter_root(&mut self) -> Result<()> {
+        match self.ast.next_root()? {
+            Root::Statements => {
+                self.push_state(State::EnterStat);
+            }
+        }
+
+        Ok(())
+    }
+
+    // statements
+
+    fn enter_stat(&mut self) -> Result<()> {
+        match *self.ast.next_stat()? {
+            Stat::Compound { len, .. } => {
+                self.begin_scope()?;
+                self.push_state(State::EndScope);
+                self.push_state(State::ContinueCompoundStat(len));
+            }
+            Stat::VarDecl { def, .. } => {
+                self.push_state(State::DeclareVar(self.ast.previous_node()));
+                if def {
+                    self.push_state(State::EnterExpr);
+                }
+            }
+            Stat::If { has_else } => {
+                if has_else {
+                    self.push_state(State::EnterStat);
+                }
+                self.push_state(State::EnterStat);
+                self.push_state(State::EnterExpr);
+            }
+            Stat::Expr => {
+                self.push_state(State::EnterExpr);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn continue_compound_stat(&mut self, len: RefLen) -> Result<()> {
+        if len > 0 {
+            self.push_state(State::ContinueCompoundStat(len - 1));
+            self.push_state(State::EnterStat);
+        }
+
+        Ok(())
+    }
+
+    fn declare_var(&mut self, node: NodeRef, mut def_ty: Option<Type<S>>) -> Result<()> {
+        let ty = match self.ast.get_stat_at(node)? {
+            Stat::VarDecl { mutability, ty, .. } => {
+                if mutability == &Mutability::Mutable && def_ty.is_none() && ty.is_nullable() {
+                    def_ty = Some(Type::Null);
+                }
+
+                match self.get_ty(ty) {
+                    Ok(ty) => ty,
+                    Err(e) => {
+                        // todo location
+                        self.on_error(&SemCheckMsg::TypeError(e), None);
+                        Type::Dynamic(ty.is_nullable())
+                    }
+                }
+            }
+            _ => return Err(SemCheckError::NodeError(NodeError::ExpectedStat)),
+        };
+        // let ty = self.next_type();
+        // let ty = Type::Dynamic(true);
+        // let ty = Type::Dynamic(false);
+
+        let initialized = def_ty.is_some();
+        if let Some(b) = def_ty {
+            match unify(ty.clone(), b, &mut self.substitutions) {
+                Ok(_) => {}
+                Err(e) => {
+                    self.on_error(&SemCheckMsg::TypeError(e), None);
+                    // todo
+                }
+            }
+        }
+        let ty = ty.substitute(&self.substitutions);
+
+        match self.ast.get_stat_at(node)? {
+            Stat::VarDecl {
+                mutability, name, ..
+            } => {
+                self.declare(node, *mutability, name.clone(), ty, initialized)?;
+            }
+            _ => return Err(SemCheckError::NodeError(NodeError::ExpectedStat)),
+        }
+
+        Ok(())
+    }
+
+    // expressions
+
+    fn enter_expr(&mut self) -> Result<()> {
+        match *self.ast.next_expr()? {
+            Expr::Null => {
+                let ty = Type::Null;
+                // let ty = self.next_type();
+                self.push_state(State::ExitExpr(ty));
+            }
+            Expr::Bool(_) => {
+                let ty = Type::Boolean(false);
+                self.push_state(State::ExitExpr(ty));
+            }
+            Expr::Integer(_) => {
+                let ty = Type::Integer(false);
+                self.push_state(State::ExitExpr(ty));
+            }
+            Expr::Float(_) => {
+                let ty = Type::Float(false);
+                self.push_state(State::ExitExpr(ty));
+            }
+            Expr::String(_) => {
+                let ty = Type::String(false);
+                self.push_state(State::ExitExpr(ty));
+            }
+            Expr::Var {
+                ref name,
+                assignment,
+            } => {
+                let node = self.ast.previous_node();
+
+                let ty = match self.lookup(name.clone()) {
+                    Some(binding) => {
+                        self.bindings.insert(node, binding.clone());
+
+                        let initialized = binding.initialized.get();
+                        let mutability = binding.mutability;
+                        match (initialized, assignment, mutability) {
+                            (true, true, Mutability::Immutable) => {
+                                self.on_error(
+                                    &SemCheckMsg::CannotAssignToVal(binding.name.clone()),
+                                    self.ast.location_of(node),
+                                );
+                            }
+                            (false, true, _) => {
+                                binding.initialized.set(true);
+                            }
+                            (false, false, _) => {
+                                self.on_error(
+                                    &SemCheckMsg::VariableNotInitialized(binding.name.clone()),
+                                    self.ast.location_of(node),
+                                );
+                            }
+                            _ => {}
+                        }
+
+                        binding.ty.clone()
+                    }
+                    None => {
+                        self.on_error(
+                            &SemCheckMsg::VariableNotFound(name.clone()),
+                            self.ast.location_of(node),
+                        );
+
+                        Type::Dynamic(true)
+                        // self.next_type()
+                    }
+                };
+
+                match assignment {
+                    true => {
+                        self.push_state(State::ExitVarAssignment(ty));
+                        self.push_state(State::EnterExpr);
+                    }
+                    false => {
+                        self.push_state(State::ExitExpr(ty));
+                    }
+                }
+            }
+            Expr::Return { right } => {
+                let ty = Type::Never;
+                self.push_state(State::ExitExpr(ty));
+                if right {
+                    self.push_state(State::EnterExpr);
+                }
+            }
+            Expr::UnOp { op } => {
+                self.push_state(State::ExitUnExpr(op));
+                self.push_state(State::EnterExpr);
+            }
+            Expr::BinOp { op, len } => {
+                self.push_state(State::ContinueBinExpr(op));
+                for _ in 1..len {
+                    self.push_state(State::ContinueBinExpr(op));
+                }
+                self.push_state(State::EnterExpr);
+            }
+            Expr::Block { len, .. } => {
+                self.push_state(State::EnterExpr);
+                self.push_state(State::ContinueCompoundStat(len));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn exit_var_assignment(&mut self, left_ty: Type<S>, right_ty: Type<S>) -> Result<()> {
+        match unify(left_ty.clone(), right_ty, &mut self.substitutions) {
+            Ok(_) => {}
+            Err(e) => {
+                self.on_error(&SemCheckMsg::TypeError(e), None);
+                // todo
+            }
+        }
+        self.push_state(State::ExitExpr(left_ty));
+
+        Ok(())
+    }
+
+    fn exit_unary_expr(&mut self, op: UnOp, right_ty: Type<S>) -> Result<()> {
+        let ty = self.un_op_type(op, &right_ty);
+        self.push_state(State::ExitExpr(ty));
+
+        Ok(())
+    }
+
+    fn continue_bin_expr(&mut self, op: BinOp, left_ty: Type<S>) -> Result<()> {
+        self.push_state(State::ExitBinExpr(op, left_ty));
+        self.push_state(State::EnterExpr);
+
+        Ok(())
+    }
+
+    fn exit_bin_expr(&mut self, op: BinOp, left_ty: Type<S>, right_ty: Type<S>) -> Result<()> {
+        let ty = self.bin_op_type(op, &left_ty, &right_ty);
+        self.push_state(State::ExitExpr(ty));
+
+        Ok(())
+    }
+
+    // ..
 
     fn get_ty(&mut self, ty: &TypeSpec<S>) -> std::result::Result<Type<S>, TypeError<S>> {
         Ok(match ty {
