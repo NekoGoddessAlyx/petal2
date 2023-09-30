@@ -466,12 +466,11 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
 
                     let ty = match self.ast.get_stat_at(node)? {
                         Stat::VarDecl { mutability, ty, .. } => {
-                            if let Mutability::Mutable = mutability {
-                                if let None = def_ty {
-                                    if ty.is_nullable() {
-                                        def_ty = Some(Type::Null);
-                                    }
-                                }
+                            if mutability == &Mutability::Mutable
+                                && def_ty.is_none()
+                                && ty.is_nullable()
+                            {
+                                def_ty = Some(Type::Null);
                             }
 
                             match self.get_ty(ty) {

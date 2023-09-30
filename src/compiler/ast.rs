@@ -148,7 +148,7 @@ pub enum Stat<S> {
     Expr,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Mutability {
     Immutable,
     Mutable,
