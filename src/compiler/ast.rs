@@ -203,6 +203,15 @@ pub enum UnOp {
     Not,
 }
 
+impl Display for UnOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UnOp::Neg => write!(f, "-"),
+            UnOp::Not => write!(f, "!"),
+        }
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum BinOp {
     Eq,
@@ -211,6 +220,19 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+}
+
+impl Display for BinOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BinOp::Eq => write!(f, "=="),
+            BinOp::NotEq => write!(f, "!="),
+            BinOp::Add => write!(f, "+"),
+            BinOp::Sub => write!(f, "-"),
+            BinOp::Mul => write!(f, "*"),
+            BinOp::Div => write!(f, "/"),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Default, PartialEq, Eq, Hash, Debug)]
@@ -733,7 +755,7 @@ mod display {
     use thiserror::Error;
 
     use crate::compiler::ast::{
-        Ast2Iterator, BinOp, Expr, Mutability, NodeError, RefLen, Root, Stat, TypeSpec, UnOp,
+        Ast2Iterator, BinOp, Expr, Mutability, NodeError, RefLen, Root, Stat, TypeSpec,
     };
     use crate::compiler::string::CompileString;
     use crate::pretty_formatter::PrettyFormatter;
@@ -958,10 +980,7 @@ mod display {
                             }
                         }
                         Expr::UnOp { op } => {
-                            match op {
-                                UnOp::Neg => write!(self, "-")?,
-                                UnOp::Not => write!(self, "!")?,
-                            };
+                            write!(self, "{}", op)?;
                             self.push_state(State::EnterExpr);
                         }
                         Expr::BinOp { op, len } => {
@@ -978,14 +997,7 @@ mod display {
                         }
                     },
                     State::ContinueBinOp(op) => {
-                        match op {
-                            BinOp::Eq => write!(self, " == ")?,
-                            BinOp::NotEq => write!(self, " != ")?,
-                            BinOp::Add => write!(self, " + ")?,
-                            BinOp::Sub => write!(self, " - ")?,
-                            BinOp::Mul => write!(self, " * ")?,
-                            BinOp::Div => write!(self, " / ")?,
-                        };
+                        write!(self, " {} ", op)?;
                         self.push_state(State::ExitBinOp);
                         self.push_state(State::EnterExpr);
                     }

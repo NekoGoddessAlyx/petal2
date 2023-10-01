@@ -597,7 +597,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                 Type::Float(false) => Type::Float(false),
                 _ => {
                     self.on_error(
-                        &SemCheckMsg::TypeError(TypeError::CannotUnOp(right_ty.clone())),
+                        &SemCheckMsg::TypeError(TypeError::CannotUnOp(op, right_ty.clone())),
                         None,
                     ); // todo
                     Type::Dynamic(true)
@@ -620,7 +620,8 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                 (Type::String(false), _) | (_, Type::String(false)) => Type::String(false),
                 (_, _) => {
                     self.on_error(
-                        &SemCheckMsg::TypeError(TypeError::CannotAdd(
+                        &SemCheckMsg::TypeError(TypeError::CannotBinOp(
+                            op,
                             left_ty.clone(),
                             right_ty.clone(),
                         )),
@@ -639,6 +640,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                 (_, _) => {
                     self.on_error(
                         &SemCheckMsg::TypeError(TypeError::CannotBinOp(
+                            op,
                             left_ty.clone(),
                             right_ty.clone(),
                         )),
@@ -871,9 +873,8 @@ pub enum TypeError<S> {
     UnknownType(S),
     TypeNotEqual(Type<S>, Type<S>),
     InfiniteType(TypeVariable, Type<S>),
-    CannotAdd(Type<S>, Type<S>),
-    CannotUnOp(Type<S>),
-    CannotBinOp(Type<S>, Type<S>),
+    CannotUnOp(UnOp, Type<S>),
+    CannotBinOp(BinOp, Type<S>, Type<S>),
 }
 
 impl<S: CompileString> Display for TypeError<S> {
@@ -888,16 +889,23 @@ impl<S: CompileString> Display for TypeError<S> {
             TypeError::InfiniteType(a, b) => {
                 write!(f, "Infinite type ({:?}, {:?})", a, b)
             }
-            TypeError::CannotAdd(a, b) => {
-                write!(f, "Cannot add types ({:?}, {:?})", a, b)
+            TypeError::CannotUnOp(op, a) => {
+                match op {
+                    UnOp::Neg => write!(f, "Unary negation")?,
+                    UnOp::Not => write!(f, "Unary not")?,
+                }
+                write!(f, " is not defined for type ({:?})", a)
             }
-            TypeError::CannotUnOp(a) => {
-                // TODO op
-                write!(f, "Cannot perform operation (?) ({:?})", a)
-            }
-            TypeError::CannotBinOp(a, b) => {
-                // TODO op
-                write!(f, "Cannot perform operation (?) ({:?}, {:?})", a, b)
+            TypeError::CannotBinOp(op, a, b) => {
+                match op {
+                    BinOp::Eq => write!(f, "Equality")?,
+                    BinOp::NotEq => write!(f, "Inequality")?,
+                    BinOp::Add => write!(f, "Addition")?,
+                    BinOp::Sub => write!(f, "Subtraction")?,
+                    BinOp::Mul => write!(f, "Multiplication")?,
+                    BinOp::Div => write!(f, "Division")?,
+                }
+                write!(f, " is not defined for types ({:?}, {:?})", a, b)
             }
         }
     }
