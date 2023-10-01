@@ -588,6 +588,25 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         })
     }
 
+    fn un_op_type(&mut self, op: UnOp, right_ty: &Type<S>) -> Type<S> {
+        match op {
+            UnOp::Neg => match right_ty {
+                Type::Dynamic(n) => Type::Dynamic(*n),
+                Type::Never => Type::Never,
+                Type::Integer(false) => Type::Integer(false),
+                Type::Float(false) => Type::Float(false),
+                _ => {
+                    self.on_error(
+                        &SemCheckMsg::TypeError(TypeError::CannotUnOp(right_ty.clone())),
+                        None,
+                    ); // todo
+                    Type::Dynamic(true)
+                }
+            },
+            UnOp::Not => Type::Boolean(false),
+        }
+    }
+
     fn bin_op_type(&mut self, op: BinOp, left_ty: &Type<S>, right_ty: &Type<S>) -> Type<S> {
         match op {
             BinOp::Eq | BinOp::NotEq => Type::Boolean(false),
@@ -628,25 +647,6 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                     Type::Dynamic(true)
                 }
             },
-        }
-    }
-
-    fn un_op_type(&mut self, op: UnOp, right_ty: &Type<S>) -> Type<S> {
-        match op {
-            UnOp::Neg => match right_ty {
-                Type::Dynamic(n) => Type::Dynamic(*n),
-                Type::Never => Type::Never,
-                Type::Integer(false) => Type::Integer(false),
-                Type::Float(false) => Type::Float(false),
-                _ => {
-                    self.on_error(
-                        &SemCheckMsg::TypeError(TypeError::CannotUnOp(right_ty.clone())),
-                        None,
-                    ); // todo
-                    Type::Dynamic(true)
-                }
-            },
-            UnOp::Not => Type::Boolean(false),
         }
     }
 }
