@@ -170,10 +170,7 @@ enum State<'gc> {
     ExitBlockExpr(u16, ExprDest),
 
     // skip
-    SkipStat,
-    SkipCompoundStat(RefLen),
-    SkipExpr,
-    ExitSkip,
+    Skip,
 }
 
 impl<'gc> State<'gc> {
@@ -208,7 +205,8 @@ impl<'gc> State<'gc> {
                 | Some(State::ContinueCompoundStat(..))
                 | Some(State::ExitIfStatCondition(..))
                 | Some(State::ExitIfStatBody(..))
-                | Some(State::ContinueBlockExpr(..)) => code_gen.enter_statement(),
+                | Some(State::ContinueBlockExpr(..))
+                | Some(State::Skip) => code_gen.enter_statement(),
                 _ => fail_transfer!(),
             },
             State::ExitStat => match from {
@@ -222,7 +220,7 @@ impl<'gc> State<'gc> {
             },
 
             State::ContinueCompoundStat(len) => match from {
-                Some(State::EnterStat) | Some(State::ExitStat) | Some(State::ExitSkip) => {
+                Some(State::EnterStat) | Some(State::ExitStat) | Some(State::Skip) => {
                     code_gen.continue_compound_statement(*len)
                 }
                 _ => fail_transfer!(),
@@ -331,25 +329,8 @@ impl<'gc> State<'gc> {
             },
 
             // skip
-            State::SkipStat => match from {
-                Some(State::ExitStat)
-                | Some(State::ExitIfStatCondition(..))
-                | Some(State::SkipCompoundStat(..)) => code_gen.skip_statement(),
-                _ => fail_transfer!(),
-            },
-            State::SkipCompoundStat(len) => match from {
-                Some(State::SkipStat) | Some(State::ExitSkip) => code_gen.skip_compound_stat(*len),
-                _ => fail_transfer!(),
-            },
-            State::SkipExpr => match from {
-                Some(State::SkipStat) => code_gen.skip_expr(),
-                _ => fail_transfer!(),
-            },
-            State::ExitSkip => match from {
-                Some(State::SkipStat)
-                | Some(State::SkipCompoundStat(..))
-                | Some(State::SkipExpr)
-                | Some(State::ExitSkip) => Ok(()),
+            State::Skip => match from {
+                Some(State::ExitStat) | Some(State::ExitIfStatCondition(..)) => code_gen.skip(),
                 _ => fail_transfer!(),
             },
         }
@@ -748,7 +729,7 @@ where
         if let Some(v) = self.get_value(condition) {
             match (v.to_bool(), has_else) {
                 (true, true) => {
-                    self.push_state(State::SkipStat);
+                    self.push_state(State::Skip);
                     self.push_state(State::EnterStat);
                 }
                 (true, false) => {
@@ -756,10 +737,10 @@ where
                 }
                 (false, true) => {
                     self.push_state(State::EnterStat);
-                    self.push_state(State::SkipStat);
+                    self.push_state(State::Skip);
                 }
                 (false, false) => {
-                    self.push_state(State::SkipStat);
+                    self.push_state(State::Skip);
                 }
             }
 
@@ -1135,74 +1116,8 @@ where
 
     // skip
 
-    fn skip_statement(&mut self) -> Result<()> {
-        self.push_state(State::ExitSkip);
-
-        let statement = self.ast.next_stat()?;
-        match *statement {
-            Stat::Compound { len, .. } => {
-                self.push_state(State::SkipCompoundStat(len));
-            }
-            Stat::VarDecl { def, .. } => {
-                if def {
-                    self.push_state(State::SkipExpr);
-                }
-            }
-            Stat::If { has_else } => {
-                if has_else {
-                    self.push_state(State::SkipStat);
-                }
-                self.push_state(State::SkipStat);
-                self.push_state(State::SkipExpr);
-            }
-            Stat::Expr => {
-                self.push_state(State::SkipExpr);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn skip_compound_stat(&mut self, len: RefLen) -> Result<()> {
-        if len > 0 {
-            self.push_state(State::SkipCompoundStat(len - 1));
-            self.push_state(State::SkipStat);
-        }
-
-        Ok(())
-    }
-
-    fn skip_expr(&mut self) -> Result<()> {
-        self.push_state(State::ExitSkip);
-
-        let expr = self.ast.next_expr()?;
-        match *expr {
-            Expr::Null => {}
-            Expr::Bool(_) => {}
-            Expr::Integer(_) => {}
-            Expr::Float(_) => {}
-            Expr::String(_) => {}
-            Expr::Var { assignment, .. } => {
-                if assignment {
-                    self.push_state(State::SkipExpr);
-                }
-            }
-            Expr::Return { .. } => {
-                self.push_state(State::SkipExpr);
-            }
-            Expr::UnOp { .. } => {
-                self.push_state(State::SkipExpr);
-            }
-            Expr::BinOp { .. } => {
-                self.push_state(State::SkipExpr);
-                self.push_state(State::SkipExpr);
-            }
-            Expr::Block { len, .. } => {
-                self.push_state(State::SkipExpr);
-                self.push_state(State::SkipCompoundStat(len));
-            }
-        }
-
+    fn skip(&mut self) -> Result<()> {
+        self.ast.skip()?;
         Ok(())
     }
 }

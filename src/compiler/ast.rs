@@ -637,7 +637,7 @@ impl<'ast, S, B> AstIterator<'ast, S, B> {
     // }
 
     /// Returns the next node without advancing
-    pub fn peek(&self) -> Result<&'ast Node<S>, NodeError> {
+    fn peek(&self) -> Result<&'ast Node<S>, NodeError> {
         self.nodes.get(self.cursor).ok_or(NodeError::MissingNode)
     }
 
@@ -685,7 +685,7 @@ impl<'ast, S, B> AstIterator<'ast, S, B> {
     // }
 
     /// Returns the next node and advances the cursor
-    pub fn next(&mut self) -> Result<&'ast Node<S>, NodeError> {
+    fn next(&mut self) -> Result<&'ast Node<S>, NodeError> {
         let node = self.peek();
         self.cursor += 1;
         node
@@ -716,6 +716,34 @@ impl<'ast, S, B> AstIterator<'ast, S, B> {
             Node::Expr(expr) => Ok(expr),
             _ => Err(NodeError::ExpectedExpr),
         }
+    }
+
+    /// Skips a single node and all of its children.
+    /// Does not perform any type checking and assumes the ast is valid.
+    pub fn skip(&mut self) -> Result<(), NodeError> {
+        let mut skip_fuel: u32 = 1;
+        while skip_fuel > 0 {
+            skip_fuel -= 1;
+            skip_fuel += match self.next()? {
+                Node::Root(Root::Statements) => 1,
+                Node::Stat(Stat::Compound { len, .. }) => len.0,
+                Node::Stat(Stat::VarDecl { def, .. }) => *def as u32,
+                Node::Stat(Stat::If { has_else }) => *has_else as u32 + 2,
+                Node::Stat(Stat::Expr) => 1,
+                Node::Expr(Expr::Null) => 0,
+                Node::Expr(Expr::Bool(_)) => 0,
+                Node::Expr(Expr::Integer(_)) => 0,
+                Node::Expr(Expr::Float(_)) => 0,
+                Node::Expr(Expr::String(_)) => 0,
+                Node::Expr(Expr::Var { assignment, .. }) => *assignment as u32,
+                Node::Expr(Expr::Return { right }) => *right as u32,
+                Node::Expr(Expr::UnOp { .. }) => 1,
+                Node::Expr(Expr::BinOp { len, .. }) => *len + 1,
+                Node::Expr(Expr::Block { len, .. }) => len.0 + 1,
+            };
+        }
+
+        Ok(())
     }
 
     /// Advances the cursor with no checks
