@@ -161,16 +161,26 @@ impl<'gc> PString<'gc> {
         mc: &Mutation<'gc>,
         values: I,
     ) -> Result<Self, StringError> {
+        let values = values.into_iter().map(|value| value.into_value(mc));
+        Self::concat_from_iter_impl(mc, values)
+    }
+
+    /// Concatenates constants (Null, Booleans, Numbers, Strings)
+    pub fn concat_from_slice(
+        mc: &Mutation<'gc>,
+        values: &[Value<'gc>],
+    ) -> Result<Self, StringError> {
+        let values = values.iter().copied();
+        Self::concat_from_iter_impl(mc, values)
+    }
+
+    fn concat_from_iter_impl<I: Iterator<Item = Value<'gc>>>(
+        mc: &Mutation<'gc>,
+        values: I,
+    ) -> Result<Self, StringError> {
         let mut bytes: SmallVec<[u8; SHORT_LEN]> = SmallVec::new();
-        for value in values.into_iter() {
-            match value.into_value(mc) {
-                Value::Null => write!(&mut bytes, "null")?,
-                Value::Boolean(true) => write!(&mut bytes, "true")?,
-                Value::Boolean(false) => write!(&mut bytes, "false")?,
-                Value::Integer(v) => write!(&mut bytes, "{}", v)?,
-                Value::Float(v) => write!(&mut bytes, "{}", v)?,
-                Value::String(v) => bytes.extend_from_slice(v.as_bytes()),
-            }
+        for value in values {
+            write_constant(&mut bytes, value)?;
         }
         Ok(match bytes.len() {
             0 => Self::empty(),
@@ -182,14 +192,6 @@ impl<'gc> PString<'gc> {
             }
             _ => Self(StringData::Long(Gc::new(mc, bytes.into_boxed_slice()))),
         })
-    }
-
-    /// Concatenates constants (Null, Booleans, Numbers, Strings)
-    pub fn concat_from_slice(
-        mc: &Mutation<'gc>,
-        values: &[Value<'gc>],
-    ) -> Result<Self, StringError> {
-        Self::concat_from_iter(mc, values.iter().copied())
     }
 
     pub fn len(&self) -> usize {
@@ -218,6 +220,18 @@ impl<'gc> PString<'gc> {
     pub fn as_str(&self) -> Result<&str, Utf8Error> {
         from_utf8(self.as_bytes())
     }
+}
+
+pub(crate) fn write_constant<W: Write>(buf: &mut W, value: Value<'_>) -> std::io::Result<()> {
+    match value {
+        Value::Null => write!(buf, "null")?,
+        Value::Boolean(true) => write!(buf, "true")?,
+        Value::Boolean(false) => write!(buf, "false")?,
+        Value::Integer(v) => write!(buf, "{}", v)?,
+        Value::Float(v) => write!(buf, "{}", v)?,
+        Value::String(v) => buf.write_all(v.as_bytes())?,
+    }
+    Ok(())
 }
 
 impl Borrow<[u8]> for PString<'_> {

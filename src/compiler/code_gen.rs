@@ -13,6 +13,7 @@ use crate::compiler::lexer::{LineNumber, Span};
 use crate::compiler::registers::{Register, Registers};
 use crate::instruction::{CIndex16, CIndex8, Instruction, RIndex};
 use crate::prototype::Prototype;
+use crate::string::write_constant;
 use crate::value::Value;
 use crate::{MessageKind, PString, StringInterner};
 
@@ -341,8 +342,6 @@ struct CodeGen<'gc, 'ast, I, L> {
     mc: &'ast Mutation<'gc>,
     ast: Ast2Iterator<'ast, PString<'gc>>,
 
-    // TODO: remove allow when needed
-    #[allow(dead_code)]
     strings: I,
     get_line_number: L,
     last_line_number: LastLineNumber,
@@ -425,7 +424,11 @@ where
         dest: ExprDest,
     ) -> Result<Option<AnyExpr<'gc>>>
     where
-        F: FnOnce(&'ast Mutation<'gc>, [Value<'gc>; N]) -> std::result::Result<Value<'gc>, R>,
+        F: FnOnce(
+            &'ast Mutation<'gc>,
+            &mut I,
+            [Value<'gc>; N],
+        ) -> std::result::Result<Value<'gc>, R>,
     {
         let mut mapped: [Value<'gc>; N] = [Value::Null; N];
         for (i, v) in values.into_iter().enumerate() {
@@ -434,7 +437,7 @@ where
                 _ => return Ok(None),
             }
         }
-        Ok(match f(self.mc, mapped) {
+        Ok(match f(self.mc, &mut self.strings, mapped) {
             Ok(value) => Some(match dest {
                 ExprDest::Register(_) => self.push_constant_to_register(value, dest)?.into(),
                 ExprDest::Anywhere => AnyExpr::Value(value),
@@ -998,7 +1001,7 @@ where
     ) -> Result<()> {
         if let Some(dest) = self.try_inline_value(
             [right],
-            |_, [right]| match op {
+            |_, _, [right]| match op {
                 UnOp::Neg => right.neg(),
                 UnOp::Not => right.not(),
             },
@@ -1042,13 +1045,22 @@ where
     ) -> Result<()> {
         if let Some(dest) = self.try_inline_value(
             [left, right],
-            |mc, [a, b]| match op {
+            |mc, strings, [a, b]| match op {
                 BinOp::Eq => Ok(a.eq(&b).into()),
                 BinOp::NotEq => Ok((!a.eq(&b)).into()),
-                BinOp::Add => a.add(mc, b),
-                BinOp::Sub => a - b,
-                BinOp::Mul => a * b,
-                BinOp::Div => a / b,
+                BinOp::Add => match [a, b] {
+                    values @ [Value::String(_), _] | values @ [_, Value::String(_)] => {
+                        let mut bytes: SmallVec<[u8; 16]> = SmallVec::new();
+                        for value in values {
+                            write_constant(&mut bytes, value).map_err(|_| ())?;
+                        }
+                        Ok(strings.intern(mc, &bytes).into())
+                    }
+                    [a, b] => a.add(mc, b).map_err(|_| ()),
+                },
+                BinOp::Sub => (a - b).map_err(|_| ()),
+                BinOp::Mul => (a * b).map_err(|_| ()),
+                BinOp::Div => (a / b).map_err(|_| ()),
             },
             dest,
         )? {
