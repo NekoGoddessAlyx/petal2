@@ -763,6 +763,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
     }
 
     fn end_if_statement_body(&mut self, if_stat: NodeRef) {
+        self.skip_nl();
         match self.peek() {
             Token::Else => {
                 self.advance();
