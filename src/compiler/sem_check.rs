@@ -446,7 +446,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         }
         let mut ty = ty.substitute(&self.substitutions);
         if make_nullable {
-            ty = ty.to_nullable();
+            ty = ty.into_nullable();
         }
 
         self.declare(node, mutability, name, ty, initialized)?;
@@ -733,7 +733,7 @@ impl<S: CompileString> Type<S> {
         }
     }
 
-    fn to_nullable(self) -> Self {
+    fn into_nullable(self) -> Self {
         match self {
             Type::Dynamic(_) => Type::Dynamic(true),
             Type::Never => Type::Never,
@@ -743,7 +743,7 @@ impl<S: CompileString> Type<S> {
             Type::Float(_) => Type::Float(true),
             Type::String(_) => Type::String(true),
             Type::NewType(_) => todo!(),
-            Type::Variable(_) => self.clone(),
+            Type::Variable(_) => self,
         }
     }
 }
