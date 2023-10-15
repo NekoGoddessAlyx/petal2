@@ -93,13 +93,26 @@ pub struct Binding<S> {
     initialized: Cell<bool>,
 }
 
+impl<S> Binding<S> {
+    pub fn new(mutability: Mutability, name: S) -> Self {
+        Self {
+            mutability,
+            name,
+            index: Local(0),
+            ty: Type::Never,
+            initialized: Cell::new(false),
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 #[repr(transparent)]
 pub struct Local(pub u32);
 
 type Result<T> = std::result::Result<T, SemCheckError>;
 
-pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast1<S>) -> Result<Ast2<S>> {
+pub fn sem_check<C: Callback, S: CompileString>(callback: C, mut ast: Ast1<S>) -> Result<Ast2<S>> {
+    let bindings = ast.take_bindings();
     let mut sem_check = SemCheck {
         callback,
         had_error: false,
@@ -109,7 +122,7 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, ast: Ast1<S>) -> Re
         state: smallvec![],
 
         contexts: smallvec![],
-        bindings: HashMap::new(),
+        bindings,
         next_type: 0,
         substitutions: HashMap::new(),
     };
@@ -253,6 +266,22 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         Ok(())
     }
 
+    /// Takes and removes a default binding provided in the unchecked ast.
+    ///
+    /// The binding should:
+    /// 1) only be associated with variable declarations
+    /// 2) therefore be unique and removable from an Rc
+    ///
+    /// Only the mutability and name properties have meaning so the rest is discarded
+    fn take_var_info(&mut self, var_decl: NodeRef) -> Result<(Mutability, S)> {
+        let binding = self
+            .bindings
+            .remove(&var_decl)
+            .and_then(|b| Rc::try_unwrap(b).ok())
+            .ok_or(NodeError::MissingBinding)?;
+        Ok((binding.mutability, binding.name))
+    }
+
     fn declare(
         &mut self,
         node: NodeRef,
@@ -381,10 +410,11 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     }
 
     fn declare_var(&mut self, node: NodeRef, mut def_ty: Option<Type<S>>) -> Result<()> {
+        let (mutability, name) = self.take_var_info(node)?;
         let mut make_nullable = false;
         let ty = match self.ast.get_stat_at(node)? {
-            Stat::VarDecl { mutability, ty, .. } => {
-                if mutability == &Mutability::Mutable && def_ty.is_none() && ty.is_nullable() {
+            Stat::VarDecl { ty, .. } => {
+                if mutability == Mutability::Mutable && def_ty.is_none() && ty.is_nullable() {
                     def_ty = Some(Type::Null);
                 }
 
@@ -419,14 +449,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
             ty = ty.to_nullable();
         }
 
-        match self.ast.get_stat_at(node)? {
-            Stat::VarDecl {
-                mutability, name, ..
-            } => {
-                self.declare(node, *mutability, name.clone(), ty, initialized)?;
-            }
-            _ => return Err(SemCheckError::NodeError(NodeError::ExpectedStat)),
-        }
+        self.declare(node, mutability, name, ty, initialized)?;
 
         Ok(())
     }

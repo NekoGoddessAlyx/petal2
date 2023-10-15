@@ -71,9 +71,18 @@ impl<S> Ast1<S> {
         Ast1Iterator {
             nodes: &self.nodes,
             locations: &self.locations,
-            bindings: (),
+            bindings: &self.bindings,
             cursor: 0,
         }
+    }
+
+    /// Takes the bindings from this ast.
+    ///
+    /// The bindings are currently only mapped to VarDecl nodes to hold
+    /// mutability and name information.
+    /// At this stage, there is no other meaning to the bindings.
+    pub fn take_bindings(&mut self) -> Bindings<S> {
+        std::mem::take(&mut self.bindings)
     }
 }
 
@@ -102,9 +111,8 @@ pub enum Node<S> {
     Expr(Expr<S>),
 }
 
-// TODO: VarDecl is too large, could be broken into two parts
 // Assume string type is sized as u64
-static_assert_size!(Node<u64>, 32);
+static_assert_size!(Node<u64>, 24);
 
 impl<S> From<Root> for Node<S> {
     fn from(value: Root) -> Self {
@@ -137,8 +145,8 @@ pub enum Stat<S> {
         last_stat: NodeRef,
     },
     VarDecl {
-        mutability: Mutability,
-        name: S,
+        // mutability: Mutability,
+        // name: S,
         ty: TypeSpec<S>,
         def: bool,
     },
@@ -316,6 +324,7 @@ impl std::ops::Sub<u32> for RefLen {
 pub struct AstBuilder<S> {
     nodes: Vec<Node<S>>,
     locations: Vec<Span>,
+    bindings: Bindings<S>,
 }
 
 impl<S: CompileString> AstBuilder<S> {
@@ -323,6 +332,7 @@ impl<S: CompileString> AstBuilder<S> {
         Self {
             nodes: Vec::with_capacity(capacity),
             locations: Vec::with_capacity(capacity),
+            bindings: HashMap::new(),
         }
     }
 
@@ -338,7 +348,7 @@ impl<S: CompileString> AstBuilder<S> {
         Ast1 {
             nodes: self.nodes,
             locations: self.locations,
-            bindings: Bindings::new(),
+            bindings: self.bindings,
             state: PhantomData,
         }
     }
@@ -400,6 +410,11 @@ impl<S: CompileString> AstBuilder<S> {
         }
 
         node
+    }
+
+    pub fn push_var_decl_binding(&mut self, var_decl: NodeRef, mutability: Mutability, name: S) {
+        self.bindings
+            .insert(var_decl, Rc::new(Binding::new(mutability, name)));
     }
 
     pub fn patch_if_stat_cond(
@@ -614,18 +629,20 @@ pub enum NodeError {
     ExpectedStat,
     #[error("Expected expression node")]
     ExpectedExpr,
+    #[error("Expected binding")]
+    MissingBinding,
 }
 
 /// Crude helper for iterating over an Ast
 // TODO: make it nicer?
-pub struct AstIterator<'ast, S, B> {
+pub struct AstIterator<'ast, S> {
     nodes: &'ast [Node<S>],
     locations: &'ast [Span],
-    bindings: B,
+    bindings: &'ast Bindings<S>,
     cursor: usize,
 }
 
-impl<'ast, S, B> AstIterator<'ast, S, B> {
+impl<'ast, S> AstIterator<'ast, S> {
     /// Returns the ref to the previous node
     pub fn previous_node(&self) -> NodeRef {
         NodeRef::new(self.cursor.saturating_sub(1))
@@ -756,6 +773,11 @@ impl<'ast, S, B> AstIterator<'ast, S, B> {
         self.locations.get(node.get()).copied()
     }
 
+    /// Returns the binding (if one exists) associated with the last node
+    pub fn get_binding_at(&self, node: NodeRef) -> Option<&'ast Binding<S>> {
+        self.bindings.get(&node).map(|b| &**b)
+    }
+
     pub fn get_stat_at(&self, node: NodeRef) -> Result<&'ast Stat<S>, NodeError> {
         match self.nodes.get(node.get()).ok_or(NodeError::MissingNode)? {
             Node::Stat(stat) => Ok(stat),
@@ -764,15 +786,8 @@ impl<'ast, S, B> AstIterator<'ast, S, B> {
     }
 }
 
-impl<'ast, S> AstIterator<'ast, S, &'ast Bindings<S>> {
-    /// Returns the binding (if one exists) associated with the last node
-    pub fn get_binding_at(&self, node: NodeRef) -> Option<&'ast Binding<S>> {
-        self.bindings.get(&node).map(|b| &**b)
-    }
-}
-
-pub type Ast1Iterator<'ast, S> = AstIterator<'ast, S, ()>;
-pub type Ast2Iterator<'ast, S> = AstIterator<'ast, S, &'ast Bindings<S>>;
+pub type Ast1Iterator<'ast, S> = AstIterator<'ast, S>;
+pub type Ast2Iterator<'ast, S> = AstIterator<'ast, S>;
 
 // display
 
@@ -816,6 +831,10 @@ mod display {
             }
             Err(PrinterErr::NodeError(NodeError::ExpectedExpr)) => {
                 write!(f, "<invalid ast: expected expression>")?;
+                Ok(())
+            }
+            Err(PrinterErr::NodeError(NodeError::MissingBinding)) => {
+                write!(f, "<invalid ast: expected binding>")?;
                 Ok(())
             }
             Err(PrinterErr::WriteErr(err)) => Err(err),
@@ -928,14 +947,19 @@ mod display {
                                 self.push_state(State::ContinueCompoundStat(len));
                             }
                             Stat::VarDecl {
-                                mutability,
-                                ref name,
+                                // mutability,
+                                // ref name,
                                 ref ty,
                                 def,
                             } => {
-                                match mutability {
-                                    Mutability::Immutable => write!(self, "val {}", name)?,
-                                    Mutability::Mutable => write!(self, "var {}", name)?,
+                                let node = self.ast.previous_node();
+                                let binding = self
+                                    .ast
+                                    .get_binding_at(node)
+                                    .ok_or(NodeError::MissingNode)?;
+                                match binding.mutability {
+                                    Mutability::Immutable => write!(self, "val {}", binding.name)?,
+                                    Mutability::Mutable => write!(self, "var {}", binding.name)?,
                                 };
 
                                 write!(self, ": ")?;
