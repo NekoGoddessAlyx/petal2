@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
+use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
 
 use crate::compiler::ast::display::AstPrettyPrinter;
@@ -37,11 +38,13 @@ pub type Ast1<S> = Ast<S, UBindings<S>>;
 impl<S> Ast1<S> {
     #[must_use]
     pub fn into_ast2(self, bindings: TBindings<S>) -> Ast2<S> {
-        Ast {
+        let ast = Ast {
             nodes: self.nodes,
             locations: self.locations,
             bindings,
-        }
+        };
+
+        ast.validate().expect("Could not validate ast")
     }
 
     pub fn iterator(&self) -> Ast1Iterator<S> {
@@ -59,6 +62,88 @@ impl<S> Ast1<S> {
     /// mutability and name information.
     pub fn take_bindings(&mut self) -> UBindings<S> {
         std::mem::take(&mut self.bindings)
+    }
+
+    fn validate(self) -> Result<Self, NodeError> {
+        enum Action {
+            EnterRoot,
+            ContinueCompoundStat(RefLen),
+            EnterStat,
+            EnterExpr,
+        }
+
+        let mut iter = self.iterator();
+        let mut actions: SmallVec<[Action; 64]> = smallvec![Action::EnterRoot];
+
+        while let Some(action) = actions.pop() {
+            match action {
+                Action::EnterRoot => {
+                    match iter.next_root()? {
+                        Root::Statements => actions.push(Action::EnterStat),
+                    };
+                }
+                Action::ContinueCompoundStat(len) => {
+                    if len > 0 {
+                        actions.push(Action::ContinueCompoundStat(len - 1));
+                        actions.push(Action::EnterStat);
+                    }
+                }
+                Action::EnterStat => match *iter.next_stat()? {
+                    Stat::Compound { len, .. } => {
+                        actions.push(Action::ContinueCompoundStat(len));
+                    }
+                    Stat::VarDecl { def } => {
+                        let node = iter.previous_node();
+                        iter.get_binding_at(node).ok_or(NodeError::MissingBinding)?;
+                        if def {
+                            actions.push(Action::EnterExpr);
+                        }
+                    }
+                    Stat::If { has_else } => {
+                        if has_else {
+                            actions.push(Action::EnterStat);
+                        }
+                        actions.push(Action::EnterStat);
+                        actions.push(Action::EnterExpr);
+                    }
+                    Stat::Expr => {
+                        actions.push(Action::EnterExpr);
+                    }
+                },
+                Action::EnterExpr => match *iter.next_expr()? {
+                    Expr::Null => {}
+                    Expr::Bool(..) => {}
+                    Expr::Integer(..) => {}
+                    Expr::Float(..) => {}
+                    Expr::String(..) => {}
+                    Expr::Var { assignment, .. } => {
+                        if assignment {
+                            actions.push(Action::EnterExpr);
+                        }
+                    }
+                    Expr::Return { right } => {
+                        if right {
+                            actions.push(Action::EnterExpr);
+                        }
+                    }
+                    Expr::UnOp { .. } => {
+                        actions.push(Action::EnterExpr);
+                    }
+                    Expr::BinOp { len, .. } => {
+                        for _ in 0..len {
+                            actions.push(Action::EnterExpr);
+                        }
+                        actions.push(Action::EnterExpr);
+                    }
+                    Expr::Block { len, .. } => {
+                        actions.push(Action::EnterExpr);
+                        actions.push(Action::ContinueCompoundStat(len));
+                    }
+                },
+            };
+        }
+
+        Ok(self)
     }
 }
 
@@ -91,6 +176,90 @@ impl<S> Ast2<S> {
             bindings: &self.bindings,
             cursor: 0,
         }
+    }
+
+    fn validate(self) -> Result<Self, NodeError> {
+        enum Action {
+            EnterRoot,
+            ContinueCompoundStat(RefLen),
+            EnterStat,
+            EnterExpr,
+        }
+
+        let mut iter = self.iterator();
+        let mut actions: SmallVec<[Action; 64]> = smallvec![Action::EnterRoot];
+
+        while let Some(action) = actions.pop() {
+            match action {
+                Action::EnterRoot => {
+                    match iter.next_root()? {
+                        Root::Statements => actions.push(Action::EnterStat),
+                    };
+                }
+                Action::ContinueCompoundStat(len) => {
+                    if len > 0 {
+                        actions.push(Action::ContinueCompoundStat(len - 1));
+                        actions.push(Action::EnterStat);
+                    }
+                }
+                Action::EnterStat => match *iter.next_stat()? {
+                    Stat::Compound { len, .. } => {
+                        actions.push(Action::ContinueCompoundStat(len));
+                    }
+                    Stat::VarDecl { def } => {
+                        let node = iter.previous_node();
+                        iter.get_binding_at(node).ok_or(NodeError::MissingBinding)?;
+                        if def {
+                            actions.push(Action::EnterExpr);
+                        }
+                    }
+                    Stat::If { has_else } => {
+                        if has_else {
+                            actions.push(Action::EnterStat);
+                        }
+                        actions.push(Action::EnterStat);
+                        actions.push(Action::EnterExpr);
+                    }
+                    Stat::Expr => {
+                        actions.push(Action::EnterExpr);
+                    }
+                },
+                Action::EnterExpr => match *iter.next_expr()? {
+                    Expr::Null => {}
+                    Expr::Bool(..) => {}
+                    Expr::Integer(..) => {}
+                    Expr::Float(..) => {}
+                    Expr::String(..) => {}
+                    Expr::Var { assignment, .. } => {
+                        let node = iter.previous_node();
+                        iter.get_binding_at(node).ok_or(NodeError::MissingBinding)?;
+                        if assignment {
+                            actions.push(Action::EnterExpr);
+                        }
+                    }
+                    Expr::Return { right } => {
+                        if right {
+                            actions.push(Action::EnterExpr);
+                        }
+                    }
+                    Expr::UnOp { .. } => {
+                        actions.push(Action::EnterExpr);
+                    }
+                    Expr::BinOp { len, .. } => {
+                        for _ in 0..len {
+                            actions.push(Action::EnterExpr);
+                        }
+                        actions.push(Action::EnterExpr);
+                    }
+                    Expr::Block { len, .. } => {
+                        actions.push(Action::EnterExpr);
+                        actions.push(Action::ContinueCompoundStat(len));
+                    }
+                },
+            };
+        }
+
+        Ok(self)
     }
 }
 
@@ -342,11 +511,13 @@ impl<S: CompileString> AstBuilder<S> {
             "Mismatch between nodes and locations"
         );
 
-        Ast1 {
+        let ast = Ast1 {
             nodes: self.nodes,
             locations: self.locations,
             bindings: self.bindings,
-        }
+        };
+
+        ast.validate().expect("Could not validate ast")
     }
 
     fn push<N: Into<Node<S>>>(&mut self, node: N, location: Span) -> NodeRef {
