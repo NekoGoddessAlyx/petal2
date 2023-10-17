@@ -401,26 +401,23 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     fn declare_var(&mut self, node: NodeRef, mut def_ty: Option<Type<S>>) -> Result<()> {
         let (mutability, name, ty) = self.take_var_info(node)?;
         let mut make_nullable = false;
-        let ty = match self.ast.get_stat_at(node)? {
-            Stat::VarDecl { .. } => {
-                if mutability == Mutability::Mutable && def_ty.is_none() && ty.is_nullable() {
-                    def_ty = Some(Type::Null);
-                }
+        let ty = {
+            if mutability == Mutability::Mutable && def_ty.is_none() && ty.is_nullable() {
+                def_ty = Some(Type::Null);
+            }
 
-                if let TypeSpec::Infer(true) = ty {
-                    make_nullable = true;
-                }
+            if let TypeSpec::Infer(true) = ty {
+                make_nullable = true;
+            }
 
-                match self.get_ty(&ty) {
-                    Ok(ty) => ty,
-                    Err(e) => {
-                        // todo location
-                        self.on_error(&SemCheckMsg::TypeError(e), None);
-                        Type::Dynamic(ty.is_nullable())
-                    }
+            match self.get_ty(&ty) {
+                Ok(ty) => ty,
+                Err(e) => {
+                    // todo location
+                    self.on_error(&SemCheckMsg::TypeError(e), None);
+                    Type::Dynamic(ty.is_nullable())
                 }
             }
-            _ => return Err(SemCheckError::NodeError(NodeError::ExpectedStat)),
         };
 
         let initialized = def_ty.is_some();

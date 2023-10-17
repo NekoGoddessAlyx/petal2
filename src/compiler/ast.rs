@@ -651,24 +651,10 @@ impl<'ast, S, B> AstIterator<'ast, S, B> {
         NodeRef::new(self.cursor.saturating_sub(1))
     }
 
-    // /// Returns the ref to the next node
-    // pub fn next_node(&self) -> NodeRef {
-    //     NodeRef::new(self.cursor)
-    // }
-
     /// Returns the next node without advancing
     fn peek(&self) -> Result<&'ast Node<S>, NodeError> {
         self.nodes.get(self.cursor).ok_or(NodeError::MissingNode)
     }
-
-    // /// Returns the next node without advancing
-    // /// The node must be a Root node.
-    // pub fn peek_root(&mut self) -> Result<&'ast Root, NodeError> {
-    //     match self.peek()? {
-    //         Node::Root(root) => Ok(root),
-    //         _ => Err(NodeError::ExpectedRoot),
-    //     }
-    // }
 
     /// Returns the next node without advancing
     /// The node must be a Stat node.
@@ -678,31 +664,6 @@ impl<'ast, S, B> AstIterator<'ast, S, B> {
             _ => Err(NodeError::ExpectedStat),
         }
     }
-
-    // /// Returns the next node without advancing
-    // /// The node must be an Expr node.
-    // pub fn peek_expr(&mut self) -> Result<&'ast Expr<S>, NodeError> {
-    //     match self.peek()? {
-    //         Node::Expr(expr) => Ok(expr),
-    //         _ => Err(NodeError::ExpectedExpr),
-    //     }
-    // }
-
-    // /// Returns the source location of the next node
-    // pub fn peek_location(&self) -> Result<Span, NodeError> {
-    //     self.locations
-    //         .get(self.cursor)
-    //         .copied()
-    //         .ok_or(NodeError::MissingNode)
-    // }
-
-    // /// Returns the source location of the last node
-    // pub fn location(&self) -> Result<Span, NodeError> {
-    //     self.locations
-    //         .get(self.cursor.saturating_sub(1))
-    //         .copied()
-    //         .ok_or(NodeError::MissingNode)
-    // }
 
     /// Returns the next node and advances the cursor
     fn next(&mut self) -> Result<&'ast Node<S>, NodeError> {
@@ -774,13 +735,6 @@ impl<'ast, S, B> AstIterator<'ast, S, B> {
     /// Returns the location associated with a given node
     pub fn location_of(&self, node: NodeRef) -> Option<Span> {
         self.locations.get(node.get()).copied()
-    }
-
-    pub fn get_stat_at(&self, node: NodeRef) -> Result<&'ast Stat, NodeError> {
-        match self.nodes.get(node.get()).ok_or(NodeError::MissingNode)? {
-            Node::Stat(stat) => Ok(stat),
-            _ => Err(NodeError::ExpectedStat),
-        }
     }
 }
 
