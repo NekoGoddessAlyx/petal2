@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::compiler::ast::{
     Ast1, Ast1Iterator, Ast2, BinOp, Expr, Mutability, NodeError, NodeRef, RefLen, Root, Stat,
-    TypeSpec, UnOp,
+    TypeSpec, UBinding, UnOp,
 };
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::Span;
@@ -93,18 +93,6 @@ pub struct Binding<S> {
     initialized: Cell<bool>,
 }
 
-impl<S> Binding<S> {
-    pub fn new(mutability: Mutability, name: S) -> Self {
-        Self {
-            mutability,
-            name,
-            index: Local(0),
-            ty: Type::Never,
-            initialized: Cell::new(false),
-        }
-    }
-}
-
 #[derive(Copy, Clone, Debug)]
 #[repr(transparent)]
 pub struct Local(pub u32);
@@ -112,7 +100,7 @@ pub struct Local(pub u32);
 type Result<T> = std::result::Result<T, SemCheckError>;
 
 pub fn sem_check<C: Callback, S: CompileString>(callback: C, mut ast: Ast1<S>) -> Result<Ast2<S>> {
-    let bindings = ast.take_bindings();
+    let old_bindings = ast.take_bindings();
     let mut sem_check = SemCheck {
         callback,
         had_error: false,
@@ -122,7 +110,8 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, mut ast: Ast1<S>) -
         state: smallvec![],
 
         contexts: smallvec![],
-        bindings,
+        old_bindings,
+        bindings: HashMap::new(),
         next_type: 0,
         substitutions: HashMap::new(),
     };
@@ -139,7 +128,7 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, mut ast: Ast1<S>) -
         true => Err(SemCheckError::FailedSemCheck),
         false => {
             let bindings = sem_check.bindings;
-            Ok(ast.into_semantics(bindings))
+            Ok(ast.into_ast2(bindings))
         }
     }
 }
@@ -223,6 +212,7 @@ struct SemCheck<'ast, C, S> {
     state: SmallVec<[State<S>; 32]>,
 
     contexts: SmallVec<[Context<S>; 16]>,
+    old_bindings: HashMap<NodeRef, UBinding<S>>,
     bindings: HashMap<NodeRef, Rc<Binding<S>>>,
 
     #[allow(unused)]
@@ -273,13 +263,12 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     /// 2) therefore be unique and removable from an Rc
     ///
     /// Only the mutability and name properties have meaning so the rest is discarded
-    fn take_var_info(&mut self, var_decl: NodeRef) -> Result<(Mutability, S)> {
+    fn take_var_info(&mut self, var_decl: NodeRef) -> Result<(Mutability, S, TypeSpec<S>)> {
         let binding = self
-            .bindings
+            .old_bindings
             .remove(&var_decl)
-            .and_then(|b| Rc::try_unwrap(b).ok())
             .ok_or(NodeError::MissingBinding)?;
-        Ok((binding.mutability, binding.name))
+        Ok((binding.mutability, binding.name, binding.ty))
     }
 
     fn declare(
@@ -410,10 +399,10 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
     }
 
     fn declare_var(&mut self, node: NodeRef, mut def_ty: Option<Type<S>>) -> Result<()> {
-        let (mutability, name) = self.take_var_info(node)?;
+        let (mutability, name, ty) = self.take_var_info(node)?;
         let mut make_nullable = false;
         let ty = match self.ast.get_stat_at(node)? {
-            Stat::VarDecl { ty, .. } => {
+            Stat::VarDecl { .. } => {
                 if mutability == Mutability::Mutable && def_ty.is_none() && ty.is_nullable() {
                     def_ty = Some(Type::Null);
                 }
@@ -422,7 +411,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                     make_nullable = true;
                 }
 
-                match self.get_ty(ty) {
+                match self.get_ty(&ty) {
                     Ok(ty) => ty,
                     Err(e) => {
                         // todo location

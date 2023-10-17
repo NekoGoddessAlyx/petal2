@@ -7,7 +7,9 @@ use gc_arena::Mutation;
 use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
 
-use crate::compiler::ast::{Ast2, Ast2Iterator, BinOp, NodeError, NodeRef, RefLen, Root, UnOp};
+use crate::compiler::ast::{
+    Ast2, Ast2Iterator, BinOp, NodeError, NodeRef, RefLen, Root, Stat, UnOp,
+};
 use crate::compiler::callback::Diagnostic;
 use crate::compiler::lexer::{LineNumber, Span};
 use crate::compiler::registers::{Register, Registers};
@@ -17,7 +19,6 @@ use crate::string::write_constant;
 use crate::value::Value;
 use crate::{MessageKind, PString, StringInterner};
 
-type Stat<'gc> = crate::compiler::ast::Stat<PString<'gc>>;
 type Expr<'gc> = crate::compiler::ast::Expr<PString<'gc>>;
 
 #[derive(Debug, Error)]

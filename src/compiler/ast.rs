@@ -1,49 +1,22 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use thiserror::Error;
 
-use crate::compiler::ast::display::write_ast;
+use crate::compiler::ast::display::AstPrettyPrinter;
 use crate::compiler::lexer::Span;
 use crate::compiler::sem_check::Binding;
 use crate::compiler::string::CompileString;
 
-pub struct Unchecked;
-pub struct Semantics;
-
-type Bindings<S> = HashMap<NodeRef, Rc<Binding<S>>>;
+// ast
 
 #[derive(Debug)]
-pub struct Ast<S, T> {
+pub struct Ast<S, B> {
     nodes: Vec<Node<S>>,
     locations: Vec<Span>,
-    bindings: Bindings<S>,
-    state: PhantomData<T>,
-}
-
-impl<S: CompileString> Display for Ast1<S> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let bindings = Bindings::new();
-        write_ast(
-            Ast2Iterator {
-                nodes: &self.nodes,
-                locations: &self.locations,
-                bindings: &bindings,
-                cursor: 0,
-            },
-            false,
-            f,
-        )
-    }
-}
-
-impl<S: CompileString> Display for Ast2<S> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write_ast(self.iterator(), true, f)
-    }
+    bindings: B,
 }
 
 impl<S, T> Ast<S, T> {
@@ -56,14 +29,18 @@ impl<S, T> Ast<S, T> {
     }
 }
 
+// ast1
+
+type UBindings<S> = HashMap<NodeRef, UBinding<S>>;
+pub type Ast1<S> = Ast<S, UBindings<S>>;
+
 impl<S> Ast1<S> {
     #[must_use]
-    pub fn into_semantics(self, bindings: Bindings<S>) -> Ast2<S> {
+    pub fn into_ast2(self, bindings: TBindings<S>) -> Ast2<S> {
         Ast {
             nodes: self.nodes,
             locations: self.locations,
             bindings,
-            state: PhantomData,
         }
     }
 
@@ -80,14 +57,30 @@ impl<S> Ast1<S> {
     ///
     /// The bindings are currently only mapped to VarDecl nodes to hold
     /// mutability and name information.
-    /// At this stage, there is no other meaning to the bindings.
-    pub fn take_bindings(&mut self) -> Bindings<S> {
+    pub fn take_bindings(&mut self) -> UBindings<S> {
         std::mem::take(&mut self.bindings)
     }
 }
 
+impl<S: CompileString> Display for Ast1<S> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        AstPrettyPrinter::new_1(f, self).write()
+    }
+}
+
+pub struct UBinding<S> {
+    pub mutability: Mutability,
+    pub name: S,
+    pub ty: TypeSpec<S>,
+}
+
+// ast2
+
+type TBindings<S> = HashMap<NodeRef, Rc<Binding<S>>>;
+pub type Ast2<S> = Ast<S, TBindings<S>>;
+
 impl<S> Ast2<S> {
-    pub fn bindings(&self) -> &Bindings<S> {
+    pub fn bindings(&self) -> &TBindings<S> {
         &self.bindings
     }
 
@@ -101,18 +94,23 @@ impl<S> Ast2<S> {
     }
 }
 
-pub type Ast1<S> = Ast<S, Unchecked>;
-pub type Ast2<S> = Ast<S, Semantics>;
+impl<S: CompileString> Display for Ast2<S> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        AstPrettyPrinter::new(f, self).write()
+    }
+}
+
+// nodes
 
 #[derive(Debug)]
 pub enum Node<S> {
     Root(Root),
-    Stat(Stat<S>),
+    Stat(Stat),
     Expr(Expr<S>),
 }
 
 // Assume string type is sized as u64
-static_assert_size!(Node<u64>, 24);
+static_assert_size!(Node<u64>, 16);
 
 impl<S> From<Root> for Node<S> {
     fn from(value: Root) -> Self {
@@ -120,8 +118,8 @@ impl<S> From<Root> for Node<S> {
     }
 }
 
-impl<S> From<Stat<S>> for Node<S> {
-    fn from(value: Stat<S>) -> Self {
+impl<S> From<Stat> for Node<S> {
+    fn from(value: Stat) -> Self {
         Node::Stat(value)
     }
 }
@@ -138,16 +136,13 @@ pub enum Root {
 }
 
 #[derive(Debug)]
-pub enum Stat<S> {
+pub enum Stat {
     Compound {
         len: RefLen,
         /// internal to the ast builder, do not use
         last_stat: NodeRef,
     },
     VarDecl {
-        // mutability: Mutability,
-        // name: S,
-        ty: TypeSpec<S>,
         def: bool,
     },
     If {
@@ -321,10 +316,12 @@ impl std::ops::Sub<u32> for RefLen {
     }
 }
 
+// ast builder
+
 pub struct AstBuilder<S> {
     nodes: Vec<Node<S>>,
     locations: Vec<Span>,
-    bindings: Bindings<S>,
+    bindings: UBindings<S>,
 }
 
 impl<S: CompileString> AstBuilder<S> {
@@ -349,7 +346,6 @@ impl<S: CompileString> AstBuilder<S> {
             nodes: self.nodes,
             locations: self.locations,
             bindings: self.bindings,
-            state: PhantomData,
         }
     }
 
@@ -378,7 +374,7 @@ impl<S: CompileString> AstBuilder<S> {
     pub fn patch_compound_stat(
         &mut self,
         compound_stat: NodeRef,
-        node: Stat<S>,
+        node: Stat,
         location: Span,
     ) -> NodeRef {
         let node = self.push(node, location);
@@ -412,9 +408,21 @@ impl<S: CompileString> AstBuilder<S> {
         node
     }
 
-    pub fn push_var_decl_binding(&mut self, var_decl: NodeRef, mutability: Mutability, name: S) {
-        self.bindings
-            .insert(var_decl, Rc::new(Binding::new(mutability, name)));
+    pub fn push_var_decl_binding(
+        &mut self,
+        var_decl: NodeRef,
+        mutability: Mutability,
+        name: S,
+        ty: TypeSpec<S>,
+    ) {
+        self.bindings.insert(
+            var_decl,
+            UBinding {
+                mutability,
+                name,
+                ty,
+            },
+        );
     }
 
     pub fn patch_if_stat_cond(
@@ -426,19 +434,14 @@ impl<S: CompileString> AstBuilder<S> {
         self.push(node, location)
     }
 
-    pub fn patch_if_stat_body(
-        &mut self,
-        _if_stat: NodeRef,
-        node: Stat<S>,
-        location: Span,
-    ) -> NodeRef {
+    pub fn patch_if_stat_body(&mut self, _if_stat: NodeRef, node: Stat, location: Span) -> NodeRef {
         self.push(node, location)
     }
 
     pub fn patch_if_stat_else_body(
         &mut self,
         if_stat: NodeRef,
-        node: Stat<S>,
+        node: Stat,
         location: Span,
     ) -> NodeRef {
         let node = self.push(node, location);
@@ -541,7 +544,7 @@ impl<S: CompileString> AstBuilder<S> {
     pub fn patch_block_expr_stat(
         &mut self,
         block_expr: NodeRef,
-        node: Stat<S>,
+        node: Stat,
         location: Span,
     ) -> NodeRef {
         let node = self.push(node, location);
@@ -617,7 +620,7 @@ impl<S: CompileString> AstBuilder<S> {
     }
 }
 
-// walker
+// ast iterator
 
 #[derive(Debug, Error)]
 pub enum NodeError {
@@ -635,14 +638,14 @@ pub enum NodeError {
 
 /// Crude helper for iterating over an Ast
 // TODO: make it nicer?
-pub struct AstIterator<'ast, S> {
+pub struct AstIterator<'ast, S, B> {
     nodes: &'ast [Node<S>],
     locations: &'ast [Span],
-    bindings: &'ast Bindings<S>,
+    bindings: &'ast B,
     cursor: usize,
 }
 
-impl<'ast, S> AstIterator<'ast, S> {
+impl<'ast, S, B> AstIterator<'ast, S, B> {
     /// Returns the ref to the previous node
     pub fn previous_node(&self) -> NodeRef {
         NodeRef::new(self.cursor.saturating_sub(1))
@@ -669,7 +672,7 @@ impl<'ast, S> AstIterator<'ast, S> {
 
     /// Returns the next node without advancing
     /// The node must be a Stat node.
-    pub fn peek_stat(&mut self) -> Result<&'ast Stat<S>, NodeError> {
+    pub fn peek_stat(&mut self) -> Result<&'ast Stat, NodeError> {
         match self.peek()? {
             Node::Stat(stat) => Ok(stat),
             _ => Err(NodeError::ExpectedStat),
@@ -719,7 +722,7 @@ impl<'ast, S> AstIterator<'ast, S> {
 
     /// Returns the next node and advances the cursor.
     /// The node must be a Stat node.
-    pub fn next_stat(&mut self) -> Result<&'ast Stat<S>, NodeError> {
+    pub fn next_stat(&mut self) -> Result<&'ast Stat, NodeError> {
         match self.next()? {
             Node::Stat(stat) => Ok(stat),
             _ => Err(NodeError::ExpectedStat),
@@ -773,12 +776,7 @@ impl<'ast, S> AstIterator<'ast, S> {
         self.locations.get(node.get()).copied()
     }
 
-    /// Returns the binding (if one exists) associated with the last node
-    pub fn get_binding_at(&self, node: NodeRef) -> Option<&'ast Binding<S>> {
-        self.bindings.get(&node).map(|b| &**b)
-    }
-
-    pub fn get_stat_at(&self, node: NodeRef) -> Result<&'ast Stat<S>, NodeError> {
+    pub fn get_stat_at(&self, node: NodeRef) -> Result<&'ast Stat, NodeError> {
         match self.nodes.get(node.get()).ok_or(NodeError::MissingNode)? {
             Node::Stat(stat) => Ok(stat),
             _ => Err(NodeError::ExpectedStat),
@@ -786,60 +784,38 @@ impl<'ast, S> AstIterator<'ast, S> {
     }
 }
 
-pub type Ast1Iterator<'ast, S> = AstIterator<'ast, S>;
-pub type Ast2Iterator<'ast, S> = AstIterator<'ast, S>;
+pub type Ast1Iterator<'ast, S> = AstIterator<'ast, S, UBindings<S>>;
+
+impl<'ast, S> Ast1Iterator<'ast, S> {
+    /// Returns the binding (if one exists) associated with the given node
+    pub fn get_binding_at(&self, node: NodeRef) -> Option<&'ast UBinding<S>> {
+        self.bindings.get(&node)
+    }
+}
+
+pub type Ast2Iterator<'ast, S> = AstIterator<'ast, S, TBindings<S>>;
+
+impl<'ast, S> Ast2Iterator<'ast, S> {
+    /// Returns the binding (if one exists) associated with the given node
+    pub fn get_binding_at(&self, node: NodeRef) -> Option<&'ast Binding<S>> {
+        self.bindings.get(&node).map(|b| &**b)
+    }
+}
 
 // display
 
 mod display {
-    use std::fmt::{Debug, Error, Formatter, Write};
+    use std::fmt::{Debug, Error, Write};
 
     use smallvec::{smallvec, SmallVec};
     use thiserror::Error;
 
     use crate::compiler::ast::{
-        Ast2Iterator, BinOp, Expr, Mutability, NodeError, RefLen, Root, Stat, TypeSpec,
+        Ast1, Ast2, AstIterator, BinOp, Expr, Mutability, NodeError, RefLen, Root, Stat, TBindings,
+        TypeSpec, UBindings,
     };
     use crate::compiler::string::CompileString;
     use crate::pretty_formatter::PrettyFormatter;
-
-    pub fn write_ast<S: CompileString>(
-        ast: Ast2Iterator<S>,
-        has_semantics: bool,
-        f: &mut Formatter<'_>,
-    ) -> std::fmt::Result {
-        let mut pretty_formatter = AstPrettyPrinter {
-            f: PrettyFormatter::new(f),
-            ast,
-            has_semantics,
-            state: smallvec![],
-        };
-        pretty_formatter.push_state(State::EnterRoot);
-        match pretty_formatter.visit() {
-            Ok(_) => Ok(()),
-            Err(PrinterErr::NodeError(NodeError::MissingNode)) => {
-                write!(f, "<invalid ast: expected node>")?;
-                Ok(())
-            }
-            Err(PrinterErr::NodeError(NodeError::ExpectedRoot)) => {
-                write!(f, "<invalid ast: expected root>")?;
-                Ok(())
-            }
-            Err(PrinterErr::NodeError(NodeError::ExpectedStat)) => {
-                write!(f, "<invalid ast: expected statement>")?;
-                Ok(())
-            }
-            Err(PrinterErr::NodeError(NodeError::ExpectedExpr)) => {
-                write!(f, "<invalid ast: expected expression>")?;
-                Ok(())
-            }
-            Err(PrinterErr::NodeError(NodeError::MissingBinding)) => {
-                write!(f, "<invalid ast: expected binding>")?;
-                Ok(())
-            }
-            Err(PrinterErr::WriteErr(err)) => Err(err),
-        }
-    }
 
     #[derive(Debug)]
     enum State {
@@ -868,20 +844,87 @@ mod display {
         WriteErr(#[from] Error),
     }
 
-    pub struct AstPrettyPrinter<'formatter, 'ast, W, S> {
+    pub struct AstPrettyPrinter<'formatter, 'ast, W, S, B> {
         f: PrettyFormatter<'formatter, W>,
-        ast: Ast2Iterator<'ast, S>,
-        has_semantics: bool,
+        ast: AstIterator<'ast, S, B>,
+        write_var: fn(&mut Self) -> Result<()>,
         state: SmallVec<[State; 16]>,
     }
 
-    impl<W: Write, S> Write for AstPrettyPrinter<'_, '_, W, S> {
+    impl<W: Write, S, B> Write for AstPrettyPrinter<'_, '_, W, S, B> {
         fn write_str(&mut self, s: &str) -> std::fmt::Result {
             self.f.write_str(s)
         }
     }
 
-    impl<'formatter, 'ast, W, S> AstPrettyPrinter<'formatter, 'ast, W, S>
+    impl<'formatter, 'ast, W: Write, S: CompileString>
+        AstPrettyPrinter<'formatter, 'ast, W, S, UBindings<S>>
+    {
+        pub fn new_1(f: &'formatter mut W, ast: &'ast Ast1<S>) -> Self {
+            let write_var = |this: &mut Self| {
+                let node = this.ast.previous_node();
+                match this.ast.get_binding_at(node) {
+                    None => write!(this, "<err>")?,
+                    Some(binding) => {
+                        match binding.mutability {
+                            Mutability::Immutable => write!(this, "val {}", binding.name)?,
+                            Mutability::Mutable => write!(this, "var {}", binding.name)?,
+                        };
+
+                        write!(this, ": ")?;
+                        match binding.ty {
+                            TypeSpec::Dyn(true) => write!(this, "dyn?")?,
+                            TypeSpec::Dyn(false) => write!(this, "dyn")?,
+                            TypeSpec::Infer(true) => write!(this, "_?")?,
+                            TypeSpec::Infer(false) => write!(this, "_")?,
+                            TypeSpec::Ty(ref ty, true) => write!(this, "{}?", ty)?,
+                            TypeSpec::Ty(ref ty, false) => write!(this, "{}", ty)?,
+                        }
+                    }
+                };
+                Ok(())
+            };
+
+            Self {
+                f: PrettyFormatter::new(f),
+                ast: ast.iterator(),
+                write_var,
+                state: smallvec![State::EnterRoot],
+            }
+        }
+    }
+
+    impl<'formatter, 'ast, W: Write, S: CompileString>
+        AstPrettyPrinter<'formatter, 'ast, W, S, TBindings<S>>
+    {
+        pub fn new(f: &'formatter mut W, ast: &'ast Ast2<S>) -> Self {
+            let write_var = |this: &mut Self| {
+                let node = this.ast.previous_node();
+                match this.ast.get_binding_at(node) {
+                    None => write!(this, "<err>")?,
+                    Some(binding) => {
+                        match binding.mutability {
+                            Mutability::Immutable => write!(this, "val {}", binding.name)?,
+                            Mutability::Mutable => write!(this, "var {}", binding.name)?,
+                        };
+
+                        write!(this, ": ")?;
+                        write!(this, "{}", binding.ty)?;
+                    }
+                };
+                Ok(())
+            };
+
+            Self {
+                f: PrettyFormatter::new(f),
+                ast: ast.iterator(),
+                write_var,
+                state: smallvec![State::EnterRoot],
+            }
+        }
+    }
+
+    impl<'formatter, 'ast, W, S, B> AstPrettyPrinter<'formatter, 'ast, W, S, B>
     where
         W: Write,
         S: CompileString,
@@ -906,7 +949,34 @@ mod display {
             self.state.pop()
         }
 
-        fn visit(mut self) -> Result<()> {
+        pub fn write(mut self) -> std::fmt::Result {
+            match self.visit_impl() {
+                Ok(_) => Ok(()),
+                Err(PrinterErr::NodeError(NodeError::MissingNode)) => {
+                    write!(self, "<invalid ast: expected node>")?;
+                    Ok(())
+                }
+                Err(PrinterErr::NodeError(NodeError::ExpectedRoot)) => {
+                    write!(self, "<invalid ast: expected root>")?;
+                    Ok(())
+                }
+                Err(PrinterErr::NodeError(NodeError::ExpectedStat)) => {
+                    write!(self, "<invalid ast: expected statement>")?;
+                    Ok(())
+                }
+                Err(PrinterErr::NodeError(NodeError::ExpectedExpr)) => {
+                    write!(self, "<invalid ast: expected expression>")?;
+                    Ok(())
+                }
+                Err(PrinterErr::NodeError(NodeError::MissingBinding)) => {
+                    write!(self, "<invalid ast: expected binding>")?;
+                    Ok(())
+                }
+                Err(PrinterErr::WriteErr(err)) => Err(err),
+            }
+        }
+
+        fn visit_impl(&mut self) -> Result<()> {
             while let Some(state) = self.pop_state() {
                 match state {
                     State::EnterRoot => match self.ast.next_root()? {
@@ -946,41 +1016,8 @@ mod display {
                                 self.indent();
                                 self.push_state(State::ContinueCompoundStat(len));
                             }
-                            Stat::VarDecl {
-                                // mutability,
-                                // ref name,
-                                ref ty,
-                                def,
-                            } => {
-                                let node = self.ast.previous_node();
-                                let binding = self
-                                    .ast
-                                    .get_binding_at(node)
-                                    .ok_or(NodeError::MissingNode)?;
-                                match binding.mutability {
-                                    Mutability::Immutable => write!(self, "val {}", binding.name)?,
-                                    Mutability::Mutable => write!(self, "var {}", binding.name)?,
-                                };
-
-                                write!(self, ": ")?;
-                                match self.has_semantics {
-                                    true => {
-                                        let node = self.ast.previous_node();
-                                        match self.ast.get_binding_at(node) {
-                                            None => write!(self, "<err>")?,
-                                            Some(binding) => write!(self, "{}", binding.ty)?,
-                                        };
-                                    }
-                                    false => match ty {
-                                        TypeSpec::Dyn(true) => write!(self, "dyn?")?,
-                                        TypeSpec::Dyn(false) => write!(self, "dyn")?,
-                                        TypeSpec::Infer(true) => write!(self, "_?")?,
-                                        TypeSpec::Infer(false) => write!(self, "_")?,
-                                        TypeSpec::Ty(ty, true) => write!(self, "{}?", ty)?,
-                                        TypeSpec::Ty(ty, false) => write!(self, "{}", ty)?,
-                                    },
-                                }
-
+                            Stat::VarDecl { def } => {
+                                (self.write_var)(self)?;
                                 if def {
                                     write!(self, " = ")?;
                                     self.push_state(State::EnterExpr);
