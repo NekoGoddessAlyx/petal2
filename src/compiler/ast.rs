@@ -733,7 +733,7 @@ impl<'ast, S, B> AstIterator<'ast, S, B> {
     }
 
     /// Returns the location associated with a given node
-    pub fn location_of(&self, node: NodeRef) -> Option<Span> {
+    pub fn get_location_at(&self, node: NodeRef) -> Option<Span> {
         self.locations.get(node.get()).copied()
     }
 }

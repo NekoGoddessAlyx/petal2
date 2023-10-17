@@ -290,7 +290,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                 let binding = entry.get().clone();
                 self.on_error(
                     &SemCheckMsg::VariableAlreadyDeclared(name),
-                    self.ast.location_of(node),
+                    self.ast.get_location_at(node),
                 );
                 Ok(binding)
             }
@@ -481,7 +481,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                             (true, true, Mutability::Immutable) => {
                                 self.on_error(
                                     &SemCheckMsg::CannotAssignToVal(binding.name.clone()),
-                                    self.ast.location_of(node),
+                                    self.ast.get_location_at(node),
                                 );
                             }
                             (false, true, _) => {
@@ -490,7 +490,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                             (false, false, _) => {
                                 self.on_error(
                                     &SemCheckMsg::VariableNotInitialized(binding.name.clone()),
-                                    self.ast.location_of(node),
+                                    self.ast.get_location_at(node),
                                 );
                             }
                             _ => {}
@@ -501,7 +501,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                     None => {
                         self.on_error(
                             &SemCheckMsg::VariableNotFound(name.clone()),
-                            self.ast.location_of(node),
+                            self.ast.get_location_at(node),
                         );
 
                         Type::Dynamic(true)

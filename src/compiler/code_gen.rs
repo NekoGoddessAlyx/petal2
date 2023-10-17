@@ -366,7 +366,7 @@ where
             LastLineNumber::Node(n) => {
                 let line_number = self
                     .ast
-                    .location_of(n)
+                    .get_location_at(n)
                     .map(|span| (self.get_line_number)(span))
                     .unwrap_or(LineNumber::new(1));
                 self.set_last_line_number(line_number);
