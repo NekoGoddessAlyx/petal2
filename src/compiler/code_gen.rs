@@ -656,10 +656,10 @@ where
 
                 Ok(())
             }
-            Stat::VarDecl { def, .. } => {
+            Stat::VarDecl { binding, def, .. } => {
                 let binding = self
                     .ast
-                    .get_binding_at(self.ast.previous_node())
+                    .get_binding_at(binding)
                     .ok_or(CodeGenError::MissingBinding)?;
                 let local = binding.index;
                 let register = self
@@ -802,10 +802,10 @@ where
         let expr = self.ast.next_expr()?;
         let node = self.ast.previous_node();
         self.set_last_line_number(node);
-        self.consume_expr_anywhere(node, expr)
+        self.consume_expr_anywhere(expr)
     }
 
-    fn consume_expr_anywhere(&mut self, node: NodeRef, expr: &'ast Expr<'gc>) -> Result<()> {
+    fn consume_expr_anywhere(&mut self, expr: &'ast Expr<'gc>) -> Result<()> {
         match *expr {
             Expr::Null => {
                 self.push_state(State::ExitExpr(Value::Null.into()));
@@ -832,10 +832,14 @@ where
 
                 Ok(())
             }
-            Expr::Var { assignment, .. } => {
+            Expr::Var {
+                ref binding,
+                assignment,
+                ..
+            } => {
                 let binding = self
                     .ast
-                    .get_binding_at(node)
+                    .get_binding_at(binding.get())
                     .ok_or(CodeGenError::MissingBinding)?;
                 let local = binding.index;
                 let local = self
@@ -858,12 +862,12 @@ where
                 // Execution can't continue after this,
                 // no need to allocate an actual new register
                 let register = Register::default();
-                self.consume_expr(node, expr, ExprDest::Register(register))?;
+                self.consume_expr(expr, ExprDest::Register(register))?;
 
                 Ok(())
             }
             _ => {
-                self.consume_expr(node, expr, ExprDest::Anywhere)?;
+                self.consume_expr(expr, ExprDest::Anywhere)?;
 
                 Ok(())
             }
@@ -874,10 +878,10 @@ where
         let expr = self.ast.next_expr()?;
         let node = self.ast.previous_node();
         self.set_last_line_number(node);
-        self.consume_expr(node, expr, dest)
+        self.consume_expr(expr, dest)
     }
 
-    fn consume_expr(&mut self, node: NodeRef, expr: &'ast Expr<'gc>, dest: ExprDest) -> Result<()> {
+    fn consume_expr(&mut self, expr: &'ast Expr<'gc>, dest: ExprDest) -> Result<()> {
         match *expr {
             Expr::Null => {
                 let dest = self.push_constant_to_register(Value::Null, dest)?;
@@ -909,10 +913,14 @@ where
 
                 Ok(())
             }
-            Expr::Var { assignment, .. } => {
+            Expr::Var {
+                ref binding,
+                assignment,
+                ..
+            } => {
                 let binding = self
                     .ast
-                    .get_binding_at(node)
+                    .get_binding_at(binding.get())
                     .ok_or(CodeGenError::MissingBinding)?;
                 let local = binding.index;
                 let local = self

@@ -1,7 +1,6 @@
+use std::cell::Cell;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::rc::Rc;
 
 use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
@@ -17,7 +16,7 @@ use crate::compiler::string::CompileString;
 pub struct Ast<S, B> {
     nodes: Vec<Node<S>>,
     locations: Vec<Span>,
-    bindings: B,
+    bindings: Vec<B>,
 }
 
 impl<S, T> Ast<S, T> {
@@ -32,12 +31,11 @@ impl<S, T> Ast<S, T> {
 
 // ast1
 
-type UBindings<S> = HashMap<NodeRef, UBinding<S>>;
-pub type Ast1<S> = Ast<S, UBindings<S>>;
+pub type Ast1<S> = Ast<S, UBinding<S>>;
 
 impl<S> Ast1<S> {
     #[must_use]
-    pub fn into_ast2(self, bindings: TBindings<S>) -> Ast2<S> {
+    pub fn into_ast2(self, bindings: Vec<Binding<S>>) -> Ast2<S> {
         let ast = Ast {
             nodes: self.nodes,
             locations: self.locations,
@@ -60,7 +58,7 @@ impl<S> Ast1<S> {
     ///
     /// The bindings are currently only mapped to VarDecl nodes to hold
     /// mutability and name information.
-    pub fn take_bindings(&mut self) -> UBindings<S> {
+    pub fn take_bindings(&mut self) -> Vec<UBinding<S>> {
         std::mem::take(&mut self.bindings)
     }
 
@@ -92,9 +90,9 @@ impl<S> Ast1<S> {
                     Stat::Compound { len, .. } => {
                         actions.push(Action::ContinueCompoundStat(len));
                     }
-                    Stat::VarDecl { def } => {
-                        let node = iter.previous_node();
-                        iter.get_binding_at(node).ok_or(NodeError::MissingBinding)?;
+                    Stat::VarDecl { binding, def } => {
+                        iter.get_binding_at(binding)
+                            .ok_or(NodeError::MissingBinding)?;
                         if def {
                             actions.push(Action::EnterExpr);
                         }
@@ -161,11 +159,10 @@ pub struct UBinding<S> {
 
 // ast2
 
-type TBindings<S> = HashMap<NodeRef, Rc<Binding<S>>>;
-pub type Ast2<S> = Ast<S, TBindings<S>>;
+pub type Ast2<S> = Ast<S, Binding<S>>;
 
 impl<S> Ast2<S> {
-    pub fn bindings(&self) -> &TBindings<S> {
+    pub fn bindings(&self) -> &[Binding<S>] {
         &self.bindings
     }
 
@@ -206,9 +203,9 @@ impl<S> Ast2<S> {
                     Stat::Compound { len, .. } => {
                         actions.push(Action::ContinueCompoundStat(len));
                     }
-                    Stat::VarDecl { def } => {
-                        let node = iter.previous_node();
-                        iter.get_binding_at(node).ok_or(NodeError::MissingBinding)?;
+                    Stat::VarDecl { binding, def } => {
+                        iter.get_binding_at(binding)
+                            .ok_or(NodeError::MissingBinding)?;
                         if def {
                             actions.push(Action::EnterExpr);
                         }
@@ -230,9 +227,13 @@ impl<S> Ast2<S> {
                     Expr::Integer(..) => {}
                     Expr::Float(..) => {}
                     Expr::String(..) => {}
-                    Expr::Var { assignment, .. } => {
-                        let node = iter.previous_node();
-                        iter.get_binding_at(node).ok_or(NodeError::MissingBinding)?;
+                    Expr::Var {
+                        ref binding,
+                        assignment,
+                        ..
+                    } => {
+                        iter.get_binding_at(binding.get())
+                            .ok_or(NodeError::MissingBinding)?;
                         if assignment {
                             actions.push(Action::EnterExpr);
                         }
@@ -312,6 +313,7 @@ pub enum Stat {
         last_stat: NodeRef,
     },
     VarDecl {
+        binding: BindingRef,
         def: bool,
     },
     If {
@@ -349,6 +351,7 @@ pub enum Expr<S> {
     Float(f64),
     String(S),
     Var {
+        binding: Cell<BindingRef>,
         name: S,
         assignment: bool,
     },
@@ -404,6 +407,22 @@ impl Display for BinOp {
             BinOp::Mul => write!(f, "*"),
             BinOp::Div => write!(f, "/"),
         }
+    }
+}
+
+#[derive(Copy, Clone, Default, PartialEq, Eq, Hash, Debug)]
+#[repr(transparent)]
+pub struct BindingRef(u32);
+
+impl BindingRef {
+    #[inline]
+    pub fn new(value: usize) -> Self {
+        Self(value as u32)
+    }
+
+    #[inline]
+    pub fn get(self) -> usize {
+        self.0 as usize
     }
 }
 
@@ -490,7 +509,7 @@ impl std::ops::Sub<u32> for RefLen {
 pub struct AstBuilder<S> {
     nodes: Vec<Node<S>>,
     locations: Vec<Span>,
-    bindings: UBindings<S>,
+    bindings: Vec<UBinding<S>>,
 }
 
 impl<S: CompileString> AstBuilder<S> {
@@ -498,7 +517,7 @@ impl<S: CompileString> AstBuilder<S> {
         Self {
             nodes: Vec::with_capacity(capacity),
             locations: Vec::with_capacity(capacity),
-            bindings: HashMap::new(),
+            bindings: Vec::with_capacity(32),
         }
     }
 
@@ -581,19 +600,17 @@ impl<S: CompileString> AstBuilder<S> {
 
     pub fn push_var_decl_binding(
         &mut self,
-        var_decl: NodeRef,
         mutability: Mutability,
         name: S,
         ty: TypeSpec<S>,
-    ) {
-        self.bindings.insert(
-            var_decl,
-            UBinding {
-                mutability,
-                name,
-                ty,
-            },
-        );
+    ) -> BindingRef {
+        let index = self.bindings.len();
+        self.bindings.push(UBinding {
+            mutability,
+            name,
+            ty,
+        });
+        BindingRef::new(index)
     }
 
     pub fn patch_if_stat_cond(
@@ -812,7 +829,7 @@ pub enum NodeError {
 pub struct AstIterator<'ast, S, B> {
     nodes: &'ast [Node<S>],
     locations: &'ast [Span],
-    bindings: &'ast B,
+    bindings: &'ast [B],
     cursor: usize,
 }
 
@@ -909,21 +926,21 @@ impl<'ast, S, B> AstIterator<'ast, S, B> {
     }
 }
 
-pub type Ast1Iterator<'ast, S> = AstIterator<'ast, S, UBindings<S>>;
+pub type Ast1Iterator<'ast, S> = AstIterator<'ast, S, UBinding<S>>;
 
 impl<'ast, S> Ast1Iterator<'ast, S> {
     /// Returns the binding (if one exists) associated with the given node
-    pub fn get_binding_at(&self, node: NodeRef) -> Option<&'ast UBinding<S>> {
-        self.bindings.get(&node)
+    pub fn get_binding_at(&self, binding: BindingRef) -> Option<&'ast UBinding<S>> {
+        self.bindings.get(binding.get())
     }
 }
 
-pub type Ast2Iterator<'ast, S> = AstIterator<'ast, S, TBindings<S>>;
+pub type Ast2Iterator<'ast, S> = AstIterator<'ast, S, Binding<S>>;
 
 impl<'ast, S> Ast2Iterator<'ast, S> {
     /// Returns the binding (if one exists) associated with the given node
-    pub fn get_binding_at(&self, node: NodeRef) -> Option<&'ast Binding<S>> {
-        self.bindings.get(&node).map(|b| &**b)
+    pub fn get_binding_at(&self, binding: BindingRef) -> Option<&'ast Binding<S>> {
+        self.bindings.get(binding.get())
     }
 }
 
@@ -936,9 +953,10 @@ mod display {
     use thiserror::Error;
 
     use crate::compiler::ast::{
-        Ast1, Ast2, AstIterator, BinOp, Expr, Mutability, NodeError, RefLen, Root, Stat, TBindings,
-        TypeSpec, UBindings,
+        Ast1, Ast2, AstIterator, BinOp, BindingRef, Expr, Mutability, NodeError, RefLen, Root,
+        Stat, TypeSpec, UBinding,
     };
+    use crate::compiler::sem_check::Binding;
     use crate::compiler::string::CompileString;
     use crate::pretty_formatter::PrettyFormatter;
 
@@ -972,7 +990,7 @@ mod display {
     pub struct AstPrettyPrinter<'formatter, 'ast, W, S, B> {
         f: PrettyFormatter<'formatter, W>,
         ast: AstIterator<'ast, S, B>,
-        write_var: fn(&mut Self) -> Result<()>,
+        write_var: fn(&mut Self, BindingRef) -> Result<()>,
         state: SmallVec<[State; 16]>,
     }
 
@@ -983,12 +1001,11 @@ mod display {
     }
 
     impl<'formatter, 'ast, W: Write, S: CompileString>
-        AstPrettyPrinter<'formatter, 'ast, W, S, UBindings<S>>
+        AstPrettyPrinter<'formatter, 'ast, W, S, UBinding<S>>
     {
         pub fn new_1(f: &'formatter mut W, ast: &'ast Ast1<S>) -> Self {
-            let write_var = |this: &mut Self| {
-                let node = this.ast.previous_node();
-                match this.ast.get_binding_at(node) {
+            let write_var = |this: &mut Self, binding: BindingRef| {
+                match this.ast.get_binding_at(binding) {
                     None => write!(this, "<err>")?,
                     Some(binding) => {
                         match binding.mutability {
@@ -1020,12 +1037,11 @@ mod display {
     }
 
     impl<'formatter, 'ast, W: Write, S: CompileString>
-        AstPrettyPrinter<'formatter, 'ast, W, S, TBindings<S>>
+        AstPrettyPrinter<'formatter, 'ast, W, S, Binding<S>>
     {
         pub fn new(f: &'formatter mut W, ast: &'ast Ast2<S>) -> Self {
-            let write_var = |this: &mut Self| {
-                let node = this.ast.previous_node();
-                match this.ast.get_binding_at(node) {
+            let write_var = |this: &mut Self, binding: BindingRef| {
+                match this.ast.get_binding_at(binding) {
                     None => write!(this, "<err>")?,
                     Some(binding) => {
                         match binding.mutability {
@@ -1141,8 +1157,8 @@ mod display {
                                 self.indent();
                                 self.push_state(State::ContinueCompoundStat(len));
                             }
-                            Stat::VarDecl { def } => {
-                                (self.write_var)(self)?;
+                            Stat::VarDecl { binding, def } => {
+                                (self.write_var)(self, binding)?;
                                 if def {
                                     write!(self, " = ")?;
                                     self.push_state(State::EnterExpr);
@@ -1179,6 +1195,7 @@ mod display {
                         Expr::Var {
                             ref name,
                             assignment,
+                            ..
                         } => {
                             write!(self, "{}", name)?;
                             if assignment {

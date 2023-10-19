@@ -10,8 +10,8 @@ use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
 
 use crate::compiler::ast::{
-    Ast1, Ast1Iterator, Ast2, BinOp, Expr, Mutability, NodeError, NodeRef, RefLen, Root, Stat,
-    TypeSpec, UBinding, UnOp,
+    Ast1, Ast1Iterator, Ast2, BinOp, BindingRef, Expr, Mutability, NodeError, NodeRef, RefLen,
+    Root, Stat, TypeSpec, UBinding, UnOp,
 };
 use crate::compiler::callback::Callback;
 use crate::compiler::lexer::Span;
@@ -111,7 +111,7 @@ pub fn sem_check<C: Callback, S: CompileString>(callback: C, mut ast: Ast1<S>) -
 
         contexts: smallvec![],
         old_bindings,
-        bindings: HashMap::new(),
+        bindings: Vec::new(),
         next_type: 0,
         substitutions: HashMap::new(),
     };
@@ -153,7 +153,7 @@ enum State<S> {
 
     // ..
     EndScope,
-    DeclareVar(NodeRef),
+    DeclareVar(NodeRef, BindingRef),
 }
 
 impl<S: CompileString> State<S> {
@@ -195,9 +195,11 @@ impl<S: CompileString> State<S> {
                 _ => fail_transfer!(),
             },
             State::EndScope => sem_check.end_scope(),
-            State::DeclareVar(node) => match from {
-                Some(State::ExitExpr(def_ty)) => sem_check.declare_var(*node, Some(def_ty)),
-                _ => sem_check.declare_var(*node, None),
+            State::DeclareVar(node, binding) => match from {
+                Some(State::ExitExpr(def_ty)) => {
+                    sem_check.declare_var(*node, *binding, Some(def_ty))
+                }
+                _ => sem_check.declare_var(*node, *binding, None),
             },
         }
     }
@@ -212,8 +214,8 @@ struct SemCheck<'ast, C, S> {
     state: SmallVec<[State<S>; 32]>,
 
     contexts: SmallVec<[Context<S>; 16]>,
-    old_bindings: HashMap<NodeRef, UBinding<S>>,
-    bindings: HashMap<NodeRef, Rc<Binding<S>>>,
+    old_bindings: Vec<UBinding<S>>,
+    bindings: Vec<Binding<S>>,
 
     #[allow(unused)]
     next_type: u32,
@@ -256,19 +258,12 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         Ok(())
     }
 
-    /// Takes and removes a default binding provided in the unchecked ast.
-    ///
-    /// The binding should:
-    /// 1) only be associated with variable declarations
-    /// 2) therefore be unique and removable from an Rc
-    ///
-    /// Only the mutability and name properties have meaning so the rest is discarded
-    fn take_var_info(&mut self, var_decl: NodeRef) -> Result<(Mutability, S, TypeSpec<S>)> {
+    fn get_ubinding(&mut self, binding: BindingRef) -> Result<(Mutability, S, TypeSpec<S>)> {
         let binding = self
             .old_bindings
-            .remove(&var_decl)
+            .get(binding.get())
             .ok_or(NodeError::MissingBinding)?;
-        Ok((binding.mutability, binding.name, binding.ty))
+        Ok((binding.mutability, binding.name.clone(), binding.ty.clone()))
     }
 
     fn declare(
@@ -278,7 +273,9 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         name: S,
         ty: Type<S>,
         initialized: bool,
-    ) -> Result<Rc<Binding<S>>> {
+    ) -> Result<BindingRef> {
+        let next_binding_index = self.bindings.len();
+
         let context = self.get_context_mut()?;
         let scope = context
             .scopes
@@ -287,7 +284,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
 
         match scope.0.entry(name.clone()) {
             Entry::Occupied(entry) => {
-                let binding = entry.get().clone();
+                let binding = *entry.get();
                 self.on_error(
                     &SemCheckMsg::VariableAlreadyDeclared(name),
                     self.ast.get_location_at(node),
@@ -298,29 +295,30 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                 let local = Local(context.num_locals);
                 context.num_locals += 1;
 
-                let binding = Rc::new(Binding {
+                let index = BindingRef::new(next_binding_index);
+                entry.insert(index);
+
+                let binding = Binding {
                     mutability,
                     name,
                     index: local,
                     ty,
                     initialized: Cell::new(initialized),
-                });
+                };
+                self.bindings.push(binding);
 
-                entry.insert(binding.clone());
-                self.bindings.insert(node, binding.clone());
-
-                Ok(binding)
+                Ok(index)
             }
         }
     }
 
-    fn lookup(&self, name: impl Borrow<[u8]>) -> Option<Rc<Binding<S>>> {
+    fn lookup(&self, name: impl Borrow<[u8]>) -> Option<BindingRef> {
         let name = name.borrow();
         let context = self.get_context().ok()?;
 
         for scope in context.scopes.iter().rev() {
             if let Some(binding) = scope.0.get(name) {
-                return Some(binding.clone());
+                return Some(*binding);
             }
         }
 
@@ -368,8 +366,8 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                 self.push_state(State::EndScope);
                 self.push_state(State::ContinueCompoundStat(len));
             }
-            Stat::VarDecl { def, .. } => {
-                self.push_state(State::DeclareVar(self.ast.previous_node()));
+            Stat::VarDecl { binding, def } => {
+                self.push_state(State::DeclareVar(self.ast.previous_node(), binding));
                 if def {
                     self.push_state(State::EnterExpr);
                 }
@@ -398,8 +396,13 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
         Ok(())
     }
 
-    fn declare_var(&mut self, node: NodeRef, mut def_ty: Option<Type<S>>) -> Result<()> {
-        let (mutability, name, ty) = self.take_var_info(node)?;
+    fn declare_var(
+        &mut self,
+        node: NodeRef,
+        binding: BindingRef,
+        mut def_ty: Option<Type<S>>,
+    ) -> Result<()> {
+        let (mutability, name, ty) = self.get_ubinding(binding)?;
         let mut make_nullable = false;
         let ty = {
             if mutability == Mutability::Mutable && def_ty.is_none() && ty.is_nullable() {
@@ -466,14 +469,17 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                 self.push_state(State::ExitExpr(ty));
             }
             Expr::Var {
+                ref binding,
                 ref name,
                 assignment,
             } => {
                 let node = self.ast.previous_node();
 
                 let ty = match self.lookup(name.clone()) {
-                    Some(binding) => {
-                        self.bindings.insert(node, binding.clone());
+                    Some(binding_ref) => {
+                        binding.set(binding_ref);
+                        let binding = &self.bindings[binding_ref.get()];
+                        let ty = binding.ty.clone();
 
                         let initialized = binding.initialized.get();
                         let mutability = binding.mutability;
@@ -496,7 +502,7 @@ impl<'ast, C: Callback, S: CompileString> SemCheck<'ast, C, S> {
                             _ => {}
                         }
 
-                        binding.ty.clone()
+                        ty
                     }
                     None => {
                         self.on_error(
@@ -667,7 +673,7 @@ struct Context<S> {
     num_locals: u32,
 }
 
-struct Scope<S>(HashMap<S, Rc<Binding<S>>>);
+struct Scope<S>(HashMap<S, BindingRef>);
 
 impl<S: CompileString> Scope<S> {
     fn new() -> Self {

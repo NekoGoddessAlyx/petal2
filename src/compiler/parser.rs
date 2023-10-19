@@ -1,8 +1,10 @@
+use std::cell::Cell;
+
 use smallvec::{smallvec, SmallVec};
 use thiserror::Error;
 
 use crate::compiler::ast::{
-    Ast1, AstBuilder, BinOp, Mutability, NodeRef, Root, Stat, TypeSpec, UnOp,
+    Ast1, AstBuilder, BinOp, BindingRef, Mutability, NodeRef, Root, Stat, TypeSpec, UnOp,
 };
 use crate::compiler::ast::{Expr, RefLen};
 use crate::compiler::callback::Callback;
@@ -624,9 +626,15 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
 
         let ty = self.consume_ty();
 
-        let var_decl = self.push_statement(push_stat, Stat::VarDecl { def: false }, var_location);
-        self.ast
-            .push_var_decl_binding(var_decl, mutability, name, ty);
+        let binding = self.ast.push_var_decl_binding(mutability, name, ty);
+        let var_decl = self.push_statement(
+            push_stat,
+            Stat::VarDecl {
+                binding,
+                def: false,
+            },
+            var_location,
+        );
 
         self.push_state(State::EndVariableDeclaration);
         if let Token::Eq = self.peek() {
@@ -921,6 +929,7 @@ impl<C: Callback, NS: NewString<S>, S: CompileString> Parser<'_, C, NS, S> {
                 let var_expr = self.push_expression(
                     push_expr,
                     Expr::Var {
+                        binding: Cell::new(BindingRef::default()),
                         name,
                         assignment: false,
                     },
